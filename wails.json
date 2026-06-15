@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "clipbox",
+  "outputfilename": "clipbox",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "know5",
+    "email": "know5"
+  },
+  "info": {
+    "companyName": "Know5",
+    "productName": "ClipBox",
+    "productVersion": "0.2.0",
+    "copyright": "Copyright 2026 Know5",
+    "comments": "A lightweight Windows clipboard manager."
+  }
+}

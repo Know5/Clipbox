@@ -1,0 +1,25 @@
+﻿{
+    "app":  "ClipBox",
+    "version":  "0.2.0",
+    "platform":  "windows",
+    "arch":  "amd64",
+    "package":  "portable",
+    "builtAtUtc":  "2026-06-09T10:27:41.2561201Z",
+    "source":  {
+                   "wailsProject":  "clipbox",
+                   "wailsProductName":  "ClipBox",
+                   "wailsCompanyName":  "Know5"
+               },
+    "files":  [
+                  {
+                      "path":  "ClipBox.exe",
+                      "bytes":  15709696,
+                      "sha256":  "16bd859f574b8f0bbc1cd5b3eef347d8198d4d7b064fea105687d4668c825bb0"
+                  },
+                  {
+                      "path":  "README.md",
+                      "bytes":  9277,
+                      "sha256":  "16e984bc63daeed758037b27b44e9a5540eeb039ae852e76295d1729a8e9b538"
+                  }
+              ]
+}
