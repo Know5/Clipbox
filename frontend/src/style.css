@@ -1,0 +1,13 @@
+@font-face {
+  font-family: "ClipBox Sans";
+  src: url("./assets/fonts/nunito-v16-latin-regular.woff2") format("woff2");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
