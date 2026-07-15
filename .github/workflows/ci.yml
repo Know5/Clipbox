@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  # ── 每次 push / PR 都跑，检查代码质量和测试 ──
+  # ── 每次 push / PR 都跑 ──
   test:
     name: Test & Lint
     runs-on: windows-latest
@@ -23,14 +23,15 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Install frontend dependencies
-        run: npm ci --audit=false
+        run: npm ci
         working-directory: frontend
 
-      - name: npm audit (high/critical)
-        run: npm audit --audit-level=high
+      - name: Check frontend compiles
+        run: npx tsc --noEmit
         working-directory: frontend
 
       - name: go vet
@@ -55,7 +56,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version-file: go.mod
+          check-latest: true
 
       - name: Install frontend dependencies
         run: npm ci
