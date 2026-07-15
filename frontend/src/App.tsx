@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip } from "../wailsjs/go/main/App";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip } from "../wailsjs/go/main/App";
 import { EventsOn, WindowMinimise } from "../wailsjs/runtime/runtime";
 import Settings from "./Settings";
 import "./App.css";
@@ -229,6 +229,22 @@ function sortClips(clips: ClipEntry[]) {
   });
 }
 
+function formatTime(ts: number) {
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = now.getTime() - d.getTime();
+  if (diff < 60_000) return "刚刚";
+  if (diff < 3600_000) return Math.floor(diff / 60_000) + " 分钟前";
+  if (diff < 86400_000) return Math.floor(diff / 3600_000) + " 小时前";
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return "昨天";
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
 function mergeClips(existing: ClipEntry[], incoming: ClipEntry[]) {
   const byId = new Map<number, ClipEntry>();
   existing.forEach((clip) => byId.set(clip.id, clip));
@@ -238,8 +254,7 @@ function mergeClips(existing: ClipEntry[], incoming: ClipEntry[]) {
 
 /** Click-to-load image: never auto-loads. User clicks placeholder to view,
  *  clicks again on the loaded image to unload it (free ~10+ MB browser memory). */
-function ClickToLoadImage({ clipId, thumbnail }: { clipId: number; thumbnail?: string }) {
-  const [dataUrl, setDataUrl] = useState("");
+function ClickToLoadImage({ clipId, thumbnail }: { clipId: number; thumbnail?: string }) {  const [dataUrl, setDataUrl] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleToggle = async (e: React.MouseEvent) => {
@@ -286,6 +301,103 @@ function ClickToLoadImage({ clipId, thumbnail }: { clipId: number; thumbnail?: s
   );
 }
 
+interface ClipItemProps {
+  clip: ClipEntry;
+  timeLabel: string;
+  selected: boolean;
+  copyStatus: CopyFeedback | null;
+  deleteConfirming: boolean;
+  deleting: boolean;
+  onHover: (id: number) => void;
+  onCopy: (id: number) => void;
+  onPin: (id: number) => void;
+  onDelete: (id: number) => void;
+  onDetail: (id: number) => void;
+}
+
+/** 列表项。memo 化后，悬停/选中/反馈只会重渲染受影响的少数几项，
+ *  而不是整个列表（长列表滑动卡顿的主要来源）。 */
+const ClipItem = memo(function ClipItem({
+  clip,
+  timeLabel,
+  selected,
+  copyStatus,
+  deleteConfirming,
+  deleting,
+  onHover,
+  onCopy,
+  onPin,
+  onDelete,
+  onDetail,
+}: ClipItemProps) {
+  const sourceLabel = clipSourceLabel(clip);
+  return (
+    <div
+      data-clip-id={clip.id}
+      className={`clip-item ${clip.pinned ? "pinned" : ""} ${selected ? "selected" : ""} ${copyStatus ? (copyStatus.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
+      onMouseEnter={() => onHover(clip.id)}
+      onClick={() => onCopy(clip.id)}
+    >
+      <div className="clip-head">
+        <span className={`dot ${clip.type}`} />
+        <div className="clip-meta">
+          <span className="clip-time">{timeLabel}</span>
+          {sourceLabel && <span className="clip-source" title={clipSourceTitle(clip)}>{sourceLabel}</span>}
+          {clip.tags && <span className="clip-tags" title={clip.tags}>{clip.tags}</span>}
+        </div>
+        {copyStatus && (
+          <span className={`clip-copy-status ${copyStatus.error ? "error" : ""}`}>
+            {copyStatus.message}
+          </span>
+        )}
+        {(deleteConfirming || deleting) && (
+          <span className="clip-delete-status">
+            {deleting ? "删除中..." : "再点删除"}
+          </span>
+        )}
+        <div className="clip-actions">
+          <button
+            className="act"
+            onClick={(e) => { e.stopPropagation(); onDetail(clip.id); }}
+            title="查看详情"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+            </svg>
+          </button>
+          <button
+            className={`act ${clip.pinned ? "on" : ""}`}
+            onClick={(e) => { e.stopPropagation(); onPin(clip.id); }}
+            title={clip.pinned ? "取消置顶" : "置顶"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill={clip.pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
+            </svg>
+          </button>
+          <button
+            className={`act danger ${deleteConfirming ? "confirming" : ""}`}
+            onClick={(e) => { e.stopPropagation(); onDelete(clip.id); }}
+            disabled={deleting}
+            title={deleteConfirming ? "再次点击删除" : "删除"}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="clip-body">
+        {clip.type === "text" ? (
+          <span className="clip-text">{clip.preview}</span>
+        ) : (
+          <ClickToLoadImage clipId={clip.id} thumbnail={clip.thumbnail} />
+        )}
+      </div>
+    </div>
+  );
+});
+
 function App() {
   const [clips, setClips] = useState<ClipEntry[]>([]);
   const [search, setSearch] = useState("");
@@ -312,10 +424,13 @@ function App() {
   const [detailError, setDetailError] = useState("");
   const [detailImageUrl, setDetailImageUrl] = useState("");
   const [detailImageLoading, setDetailImageLoading] = useState(false);
+  // 每分钟自增一次，触发相对时间标签（"x 分钟前"）重新计算
+  const [, setTimeTick] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const searchValueRef = useRef("");
   const filterValueRef = useRef<ClipFilter>("all");
   const selectedTagRef = useRef("");
+  const clipsRef = useRef<ClipEntry[]>([]);
   const requestSeq = useRef(0);
   const clearConfirmTimer = useRef<number | null>(null);
   const clearMessageTimer = useRef<number | null>(null);
@@ -429,10 +544,24 @@ function App() {
   }, [selectedTag]);
 
   useEffect(() => {
+    clipsRef.current = clips;
+  }, [clips]);
+
+  useEffect(() => {
     loadClipPage(0, false);
-    const unsub1 = EventsOn("clip:new", () => {
+    const unsub1 = EventsOn("clip:new", (entry?: ClipEntry) => {
       const activeSearch = searchValueRef.current.trim();
-      loadClipPage(0, false, activeSearch, filterValueRef.current, selectedTagRef.current);
+      const activeFilter = filterValueRef.current;
+      const activeTag = selectedTagRef.current;
+      // 无过滤条件时增量合并新条目，保留已加载的分页和滚动位置；
+      // 处于搜索/标签/类型过滤视图时仍整页刷新，让后端决定匹配结果。
+      if (!entry || !entry.id || activeSearch || activeTag || (activeFilter !== "all" && entry.type !== activeFilter)) {
+        loadClipPage(0, false, activeSearch, activeFilter, activeTag);
+        return;
+      }
+      const isNew = !clipsRef.current.some((clip) => clip.id === entry.id);
+      setClips((prev) => mergeClips(prev, [entry]));
+      if (isNew) setTotalClips((total) => total + 1);
     });
     const unsub2 = EventsOn("window:shown", () => {
       setTimeout(() => searchRef.current?.focus(), 100);
@@ -466,6 +595,39 @@ function App() {
     GetWindowPinned().then(setWindowPinned).catch(console.error);
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setTimeTick((tick) => tick + 1), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    // 主题：dark / light / system（跟随 Windows），应用到 <html data-theme>
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    let mode = "dark";
+    const apply = () => {
+      const resolved = mode === "light" || (mode === "system" && media.matches) ? "light" : "dark";
+      document.documentElement.setAttribute("data-theme", resolved);
+    };
+    GetAppSettings()
+      .then((settings) => {
+        mode = (settings as { theme?: string })?.theme || "dark";
+        apply();
+      })
+      .catch(console.error);
+    const unsub = EventsOn("settings:updated", (settings?: { theme?: string }) => {
+      mode = settings?.theme || "dark";
+      apply();
+    });
+    const onMediaChange = () => {
+      if (mode === "system") apply();
+    };
+    media.addEventListener("change", onMediaChange);
+    return () => {
+      unsub();
+      media.removeEventListener("change", onMediaChange);
+    };
+  }, []);
+
   const handleToggleWindowPin = async () => {
     try {
       const pinned = await ToggleWindowPin();
@@ -486,10 +648,19 @@ function App() {
     }
   }, [showCopyFeedback]);
 
+  const handleHover = useCallback((id: number) => {
+    setSelectedClipId(id);
+  }, []);
+
   const handlePin = useCallback(async (id: number) => {
-    await TogglePin(id);
-    loadClipPage(0, false, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
-  }, [loadClipPage]);
+    try {
+      await TogglePin(id);
+      // 本地翻转置顶状态并重排，保留已加载的分页
+      setClips((prev) => sortClips(prev.map((clip) => (clip.id === id ? { ...clip, pinned: !clip.pinned } : clip))));
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
 
   const handleDelete = useCallback(async (id: number) => {
     cancelDeleteConfirmTimer();
@@ -499,14 +670,16 @@ function App() {
     try {
       await DeleteClip(id);
       setDetailClip((clip) => clip?.id === id ? null : clip);
-      await loadClipPage(0, false, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
+      // 本地移除，保留已加载的分页
+      setClips((prev) => prev.filter((clip) => clip.id !== id));
+      setTotalClips((total) => Math.max(0, total - 1));
     } catch (e) {
       console.error(e);
       setListError("删除失败");
     } finally {
       setDeleteDeletingId((current) => current === id ? null : current);
     }
-  }, [cancelDeleteConfirmTimer, loadClipPage]);
+  }, [cancelDeleteConfirmTimer]);
 
   const requestDelete = useCallback((id: number) => {
     if (deleteDeletingId === id) return;
@@ -564,10 +737,13 @@ function App() {
   const handleSaveMetadata = useCallback(async (id: number, note: string, tags: string) => {
     const updated = (await UpdateClipMetadata(id, note, tags)) as ClipEntry;
     setDetailClip(updated);
+    // 本地更新对应条目并刷新标签选项，不整页重载
     setClips((prev) => prev.map((clip) => clip.id === id ? { ...clip, note: updated.note, tags: updated.tags } : clip));
-    await loadClipPage(0, false, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
+    GetClipTags(searchValueRef.current.trim(), filterValueRef.current)
+      .then((tagList) => setTagOptions(tagList || []))
+      .catch(console.error);
     return updated;
-  }, [loadClipPage]);
+  }, []);
 
   const handleExportClip = useCallback(async (id: number) => {
     return (await ExportClip(id)) as ClipExportResult;
@@ -608,22 +784,6 @@ function App() {
     }
   };
 
-  const formatTime = (ts: number) => {
-    const d = new Date(ts);
-    const now = new Date();
-    const diff = now.getTime() - d.getTime();
-    if (diff < 60_000) return "刚刚";
-    if (diff < 3600_000) return Math.floor(diff / 60_000) + " 分钟前";
-    if (diff < 86400_000) return Math.floor(diff / 3600_000) + " 小时前";
-    if (d.toDateString() === now.toDateString()) {
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    }
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (d.toDateString() === yesterday.toDateString()) return "昨天";
-    return d.toLocaleDateString([], { month: "short", day: "numeric" });
-  };
-
   const filtered = clips;
   const selectedIndex = selectedClipId == null ? -1 : filtered.findIndex((clip) => clip.id === selectedClipId);
   const selectedClip = selectedIndex >= 0 ? filtered[selectedIndex] : null;
@@ -653,6 +813,21 @@ function App() {
           closeDetail();
           return;
         }
+        if (showSettings) {
+          // 正在编辑设置输入框时，Esc 先失焦（触发失焦保存），再次 Esc 才返回主界面
+          const active = document.activeElement as HTMLElement | null;
+          if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+            active.blur();
+            return;
+          }
+          setShowSettings(false);
+          return;
+        }
+        if (search.trim()) {
+          // 有搜索词时先清空搜索，再次 Esc 才隐藏窗口
+          setSearch("");
+          return;
+        }
         HideWindow();
         return;
       }
@@ -660,7 +835,9 @@ function App() {
 
       const target = e.target as HTMLElement | null;
       const isInput = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || Boolean(target?.isContentEditable);
-      if (isInput) return;
+      // 搜索框是键盘导航的起点：放行 ↑↓/Enter 直接操作列表，其余按键正常输入文字。
+      const isSearchInput = target === searchRef.current;
+      if (isInput && !isSearchInput) return;
       const selectAt = (index: number) => {
         if (filtered[index]) {
           setSelectedClipId(filtered[index].id);
@@ -704,7 +881,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", down);
     };
-  }, [closeDetail, detailOpen, filtered, handleCopy, handleOpenDetail, requestDelete, selectedClip, selectedIndex, showSettings]);
+  }, [closeDetail, detailOpen, filtered, handleCopy, handleOpenDetail, requestDelete, search, selectedClip, selectedIndex, showSettings]);
 
   const emptyTitle = search.trim() ? "没有匹配记录" : "暂无剪贴板记录";
   const emptyHint = search.trim()
@@ -767,9 +944,15 @@ function App() {
         </button>
       </div>
       {(visibleTags.length > 0 || selectedTag) && (
-        <div className="tag-row">
+        <div
+          className="tag-row"
+          onWheel={(e) => {
+            // 标签溢出时支持鼠标滚轮横向滚动
+            if (e.deltaY !== 0) e.currentTarget.scrollLeft += e.deltaY;
+          }}
+        >
           <button className={`tag-chip ${selectedTag === "" ? "active" : ""}`} onClick={() => setSelectedTag("")}>全部标签</button>
-          {visibleTags.slice(0, 8).map((tag) => (
+          {visibleTags.map((tag) => (
             <button
               key={tag.name}
               className={`tag-chip ${selectedTag === tag.name ? "active" : ""}`}
@@ -797,79 +980,27 @@ function App() {
             </svg>
             <span>{emptyTitle}</span>
             <span className="empty-hint">{emptyHint}</span>
+            {!search.trim() && filter === "all" && (
+              <span className="empty-hint">按 <kbd>{hotkeyDisplay}</kbd> 随时唤起 ClipBox</span>
+            )}
           </div>
         )}
-        {filtered.map((clip) => {
-          const sourceLabel = clipSourceLabel(clip);
-          const deleteConfirming = deleteConfirmId === clip.id;
-          const deleting = deleteDeletingId === clip.id;
-          return (
-          <div
+        {filtered.map((clip) => (
+          <ClipItem
             key={clip.id}
-            data-clip-id={clip.id}
-            className={`clip-item ${clip.pinned ? "pinned" : ""} ${clip.id === selectedClipId ? "selected" : ""} ${copyFeedback.clipId === clip.id ? (copyFeedback.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
-            onMouseEnter={() => setSelectedClipId(clip.id)}
-            onClick={() => handleCopy(clip.id)}
-          >
-            <div className="clip-head">
-              <span className={`dot ${clip.type}`} />
-              <div className="clip-meta">
-                <span className="clip-time">{formatTime(clip.timestamp)}</span>
-                {sourceLabel && <span className="clip-source" title={clipSourceTitle(clip)}>{sourceLabel}</span>}
-                {clip.tags && <span className="clip-tags" title={clip.tags}>{clip.tags}</span>}
-              </div>
-              {copyFeedback.clipId === clip.id && (
-                <span className={`clip-copy-status ${copyFeedback.error ? "error" : ""}`}>
-                  {copyFeedback.message}
-                </span>
-              )}
-              {(deleteConfirming || deleting) && (
-                <span className="clip-delete-status">
-                  {deleting ? "删除中..." : "再点删除"}
-                </span>
-              )}
-              <div className="clip-actions">
-                <button
-                  className="act"
-                  onClick={(e) => { e.stopPropagation(); handleOpenDetail(clip.id); }}
-                  title="查看详情"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-                  </svg>
-                </button>
-                <button
-                  className={`act ${clip.pinned ? "on" : ""}`}
-                  onClick={(e) => { e.stopPropagation(); handlePin(clip.id); }}
-                  title={clip.pinned ? "取消置顶" : "置顶"}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill={clip.pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
-                  </svg>
-                </button>
-                <button
-                  className={`act danger ${deleteConfirming ? "confirming" : ""}`}
-                  onClick={(e) => { e.stopPropagation(); requestDelete(clip.id); }}
-                  disabled={deleting}
-                  title={deleteConfirming ? "再次点击删除" : "删除"}
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="clip-body">
-              {clip.type === "text" ? (
-                <span className="clip-text">{clip.preview}</span>
-              ) : (
-                <ClickToLoadImage clipId={clip.id} thumbnail={clip.thumbnail} />
-              )}
-            </div>
-          </div>
-          );
-        })}
+            clip={clip}
+            timeLabel={formatTime(clip.timestamp)}
+            selected={clip.id === selectedClipId}
+            copyStatus={copyFeedback.clipId === clip.id ? copyFeedback : null}
+            deleteConfirming={deleteConfirmId === clip.id}
+            deleting={deleteDeletingId === clip.id}
+            onHover={handleHover}
+            onCopy={handleCopy}
+            onPin={handlePin}
+            onDelete={requestDelete}
+            onDetail={handleOpenDetail}
+          />
+        ))}
         {clips.length > 0 && (
           <div className="list-status">
             <span>已加载 {clips.length} / {totalClips}</span>
@@ -897,13 +1028,16 @@ function App() {
 
       <div className="footer">
         <div className="kbd-group">
-          <kbd>{hotkeyDisplay}</kbd> 唤起
-        </div>
-        <div className="kbd-group">
           <kbd>↑↓</kbd> 选择
         </div>
         <div className="kbd-group">
           <kbd>↵</kbd> 粘贴
+        </div>
+        <div className="kbd-group">
+          <kbd>Space</kbd> 详情
+        </div>
+        <div className="kbd-group">
+          <kbd>Del</kbd> 删除
         </div>
         <div className="kbd-group">
           <kbd>Esc</kbd> 关闭

@@ -35,6 +35,18 @@ const (
 	ModWin     = 0x0008
 )
 
+// PanicLogger is set by the host application to receive panic reports from
+// internal goroutines. If nil, panics are silently recovered.
+var PanicLogger func(format string, args ...interface{})
+
+func recoverPanic(name string) {
+	if r := recover(); r != nil {
+		if PanicLogger != nil {
+			PanicLogger("panic in %s: %v", name, r)
+		}
+	}
+}
+
 type msg struct {
 	hwnd    uintptr
 	message uint32
@@ -91,6 +103,7 @@ func (m *Manager) Start(modifiers, vk uint32) error {
 	errCh := make(chan error, 1)
 
 	go func() {
+		defer recoverPanic("hotkey:messageLoop")
 		goruntime.LockOSThread()
 		defer goruntime.UnlockOSThread()
 		registered := false

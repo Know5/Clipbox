@@ -21,6 +21,7 @@ type AppSettings struct {
 	RecordSourceInfo       bool     `json:"recordSourceInfo"`
 	StartAtLogin           bool     `json:"startAtLogin"`
 	AutoPaste              bool     `json:"autoPaste"`
+	Theme                  string   `json:"theme"`
 	MinTextLength          int      `json:"minTextLength"`
 	MaxClips               int      `json:"maxClips"`
 	RetentionDays          int      `json:"retentionDays"`
@@ -54,6 +55,7 @@ func defaultAppSettings() AppSettings {
 		RecordSourceInfo:       true,
 		StartAtLogin:           false,
 		AutoPaste:              true,
+		Theme:                  "dark",
 		MinTextLength:          1,
 		MaxClips:               500,
 		RetentionDays:          0,
@@ -65,6 +67,11 @@ func defaultAppSettings() AppSettings {
 }
 
 func normalizeAppSettings(settings AppSettings) AppSettings {
+	switch settings.Theme {
+	case "dark", "light", "system":
+	default:
+		settings.Theme = "dark"
+	}
 	if settings.MinTextLength < 1 {
 		settings.MinTextLength = 1
 	}
@@ -113,21 +120,30 @@ func (a *App) GetAppSettings() AppSettings {
 }
 
 func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
+	prev := a.loadAppSettings()
 	settings = normalizeAppSettings(settings)
 	saveErr := a.saveAppSettings(settings)
-	cleanupErr := a.applyCleanup(settings)
-	if cleanupErr != nil {
-		return settings, cleanupErr
-	}
+
+	// 先广播设置变更，让主题等 UI 状态立即生效，再做可能耗时的清理。
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "settings:updated", settings)
-		runtime.EventsEmit(a.ctx, "clips:changed")
 	}
 	a.updateTrayState()
-	if saveErr != nil {
-		return settings, saveErr
+
+	// 只有保留策略变化时才需要清理（含图片目录扫描，开销大），
+	// 拨动普通开关不应触发清理和列表重载。
+	policyChanged := prev.MaxClips != settings.MaxClips ||
+		prev.RetentionDays != settings.RetentionDays ||
+		prev.MaxImageStorageMB != settings.MaxImageStorageMB
+	if policyChanged {
+		if err := a.applyCleanup(settings); err != nil {
+			return settings, err
+		}
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "clips:changed")
+		}
 	}
-	return settings, nil
+	return settings, saveErr
 }
 
 func (a *App) loadAppSettings() AppSettings {
@@ -135,12 +151,21 @@ func (a *App) loadAppSettings() AppSettings {
 	if a.store == nil {
 		return settings
 	}
+	a.settingsMu.Lock()
+	if a.settingsCache != nil {
+		cached := *a.settingsCache
+		a.settingsMu.Unlock()
+		return cached
+	}
+	a.settingsMu.Unlock()
+
 	settings.CapturePaused = a.getBoolSetting("capture_paused", settings.CapturePaused)
 	settings.RecordImages = a.getBoolSetting("record_images", settings.RecordImages)
 	settings.SkipSensitiveText = a.getBoolSetting("skip_sensitive_text", settings.SkipSensitiveText)
 	settings.RecordSourceInfo = a.getBoolSetting("record_source_info", settings.RecordSourceInfo)
 	settings.StartAtLogin = getStartAtLogin()
 	settings.AutoPaste = a.getBoolSetting("auto_paste", settings.AutoPaste)
+	settings.Theme = a.getStringSetting("theme")
 	settings.MinTextLength = a.getIntSetting("min_text_length", settings.MinTextLength)
 	settings.MaxClips = a.getIntSetting("max_clips", settings.MaxClips)
 	settings.RetentionDays = a.getIntSetting("retention_days", settings.RetentionDays)
@@ -152,7 +177,13 @@ func (a *App) loadAppSettings() AppSettings {
 	settings.AutoBackupMaxFiles = a.getIntSetting("auto_backup_max_files", settings.AutoBackupMaxFiles)
 	settings.ExcludedApps = splitSettingList(a.getStringSetting("excluded_apps"))
 	settings.ExcludedWindowTitles = splitSettingList(a.getStringSetting("excluded_window_titles"))
-	return normalizeAppSettings(settings)
+	settings = normalizeAppSettings(settings)
+
+	a.settingsMu.Lock()
+	cached := settings
+	a.settingsCache = &cached
+	a.settingsMu.Unlock()
+	return settings
 }
 
 func (a *App) saveAppSettings(settings AppSettings) error {
@@ -165,6 +196,7 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		"skip_sensitive_text":       strconv.FormatBool(settings.SkipSensitiveText),
 		"record_source_info":        strconv.FormatBool(settings.RecordSourceInfo),
 		"auto_paste":                strconv.FormatBool(settings.AutoPaste),
+		"theme":                     settings.Theme,
 		"min_text_length":           strconv.Itoa(settings.MinTextLength),
 		"max_clips":                 strconv.Itoa(settings.MaxClips),
 		"retention_days":            strconv.Itoa(settings.RetentionDays),
@@ -177,13 +209,20 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		"excluded_apps":             strings.Join(settings.ExcludedApps, "\n"),
 		"excluded_window_titles":    strings.Join(settings.ExcludedWindowTitles, "\n"),
 	}
-	for key, value := range values {
-		if err := a.store.SetSetting(key, value); err != nil {
-			return err
-		}
+	// 单事务批量写入，替代 17 次独立 Exec。
+	if err := a.store.SetSettings(values); err != nil {
+		return err
 	}
-	if err := setStartAtLogin(settings.StartAtLogin); err != nil {
-		return fmt.Errorf("其他设置已保存，但开机自启更新失败: %w", err)
+	a.settingsMu.Lock()
+	cached := settings
+	a.settingsCache = &cached
+	a.settingsMu.Unlock()
+
+	// 注册表操作相对慢，只有开机自启状态变化时才写。
+	if getStartAtLogin() != settings.StartAtLogin {
+		if err := setStartAtLogin(settings.StartAtLogin); err != nil {
+			return fmt.Errorf("其他设置已保存，但开机自启更新失败: %w", err)
+		}
 	}
 	return nil
 }

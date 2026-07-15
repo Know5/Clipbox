@@ -14,6 +14,7 @@ interface AppSettings {
   recordSourceInfo: boolean;
   startAtLogin: boolean;
   autoPaste: boolean;
+  theme: string;
   minTextLength: number;
   maxClips: number;
   retentionDays: number;
@@ -115,6 +116,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   recordSourceInfo: true,
   startAtLogin: false,
   autoPaste: true,
+  theme: "dark",
   minTextLength: 1,
   maxClips: 500,
   retentionDays: 0,
@@ -234,13 +236,28 @@ function targetSummary(info: TargetWindowInfo): string {
   return info.title ? `${app} · ${info.title}` : app;
 }
 
+// Wails 的 Go error 会以字符串形式 reject，err?.message 取不到内容。
+function errText(err: unknown, fallback: string): string {
+  if (typeof err === "string" && err.trim()) return err;
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
+// 立即把主题应用到 <html data-theme>，不等后端保存往返。
+function applyThemeNow(mode: string) {
+  const resolved =
+    mode === "light" || (mode === "system" && window.matchMedia("(prefers-color-scheme: light)").matches)
+      ? "light"
+      : "dark";
+  document.documentElement.setAttribute("data-theme", resolved);
+}
+
 export default function Settings({ onBack }: SettingsProps) {
   const [currentDisplay, setCurrentDisplay] = useState("加载中...");
   const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [appInfo, setAppInfo] = useState<AppInfo>(DEFAULT_APP_INFO);
   const [stats, setStats] = useState<StorageStats>(DEFAULT_STATS);
   const [lastTargetInfo, setLastTargetInfo] = useState<TargetWindowInfo>(DEFAULT_TARGET_INFO);
-  const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [rulesMessage, setRulesMessage] = useState("");
   const [storageMessage, setStorageMessage] = useState("");
@@ -263,6 +280,31 @@ export default function Settings({ onBack }: SettingsProps) {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const recordRef = useRef<HTMLDivElement>(null);
+  const saveSeqRef = useRef(0);
+
+  // 立即把设置写入后端；失败时回滚到 prev 并提示。seq 防止乱序响应覆盖新状态。
+  const persistSettings = useCallback((next: AppSettings, prev: AppSettings, onError: (msg: string) => void) => {
+    const seq = ++saveSeqRef.current;
+    setAppSettings(next);
+    UpdateAppSettings(next)
+      .then((normalized) => {
+        if (saveSeqRef.current === seq) setAppSettings(normalized || next);
+      })
+      .catch((err) => {
+        if (saveSeqRef.current !== seq) return;
+        setAppSettings(prev);
+        onError(errText(err, "保存设置失败"));
+      });
+  }, []);
+
+  // 输入框失焦时提交当前编辑（数字/文本类设置的保存入口）。
+  const commitEditedSettings = (onError: (msg: string) => void) => {
+    persistSettings(appSettings, appSettings, onError);
+  };
+
+  const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") e.currentTarget.blur();
+  };
 
   useEffect(() => {
     GetHotkeySettings()
@@ -287,6 +329,13 @@ export default function Settings({ onBack }: SettingsProps) {
 
   useEffect(() => {
     const unsubscribe = EventsOn("settings:updated", (settings?: AppSettings) => {
+      // 用户正在设置页输入时不覆盖表单，避免外部事件打断编辑。
+      const active = document.activeElement;
+      const editing =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" || active.tagName === "TEXTAREA") &&
+        Boolean(active.closest(".settings-panel"));
+      if (editing) return;
       setAppSettings(settings || DEFAULT_SETTINGS);
     });
     return () => unsubscribe();
@@ -326,6 +375,14 @@ export default function Settings({ onBack }: SettingsProps) {
       if (!recording) return;
       e.preventDefault();
       e.stopPropagation();
+
+      // Esc 取消录制，而不是把 Esc 录成快捷键。
+      if (e.key === "Escape") {
+        setRecording(false);
+        setRecModifiers(0);
+        setRecKeyCode(0);
+        return;
+      }
 
       let mods = 0;
       if (e.ctrlKey) mods |= MOD_CONTROL;
@@ -380,7 +437,7 @@ export default function Settings({ onBack }: SettingsProps) {
       setRecModifiers(0);
       setRecKeyCode(0);
     } catch (err: any) {
-      setError(err?.message || "保存失败，请重试");
+      setError(errText(err, "保存失败，请重试"));
     } finally {
       setSaving(false);
     }
@@ -391,7 +448,9 @@ export default function Settings({ onBack }: SettingsProps) {
     setRulesMessage("");
     setStorageMessage("");
     setAppMessage("");
-    setAppSettings((prev) => ({ ...prev, [key]: !prev[key] }));
+    // 开关类设置拨动后立即持久化，失败会回滚开关状态。
+    const next = { ...appSettings, [key]: !appSettings[key] };
+    persistSettings(next, appSettings, key === "autoBackupEnabled" ? setAppMessage : setRulesMessage);
   };
 
   const updateNumberSetting = (key: "minTextLength" | "maxClips" | "retentionDays" | "maxImageStorageMB" | "autoBackupIntervalDays" | "autoBackupMaxFiles", value: string) => {
@@ -421,21 +480,6 @@ export default function Settings({ onBack }: SettingsProps) {
     setAppSettings((prev) => ({ ...prev, [key]: lines }));
   };
 
-  const saveAppSettings = async () => {
-    setSettingsSaving(true);
-    setSettingsMessage("");
-    try {
-      const normalized = await UpdateAppSettings(appSettings);
-      setAppSettings(normalized || appSettings);
-      setSettingsMessage("已保存");
-      refreshStats();
-    } catch (err: any) {
-      setSettingsMessage(err?.message || "保存失败");
-    } finally {
-      setSettingsSaving(false);
-    }
-  };
-
   const addLastTargetAppRule = async () => {
     const info = lastTargetInfo.available ? lastTargetInfo : await refreshLastTargetInfo();
     const value = info.processName || info.processPath;
@@ -443,8 +487,13 @@ export default function Settings({ onBack }: SettingsProps) {
       setRulesMessage("没有可加入的上个应用");
       return;
     }
-    setAppSettings((prev) => ({ ...prev, excludedApps: appendUniqueRule(prev.excludedApps, value) }));
-    setRulesMessage("已加入排除应用，记得保存策略");
+    const nextRules = appendUniqueRule(appSettings.excludedApps, value);
+    if (nextRules === appSettings.excludedApps) {
+      setRulesMessage("该应用已在排除列表中");
+      return;
+    }
+    persistSettings({ ...appSettings, excludedApps: nextRules }, appSettings, setRulesMessage);
+    setRulesMessage("已加入排除应用");
   };
 
   const addLastTargetTitleRule = async () => {
@@ -453,8 +502,13 @@ export default function Settings({ onBack }: SettingsProps) {
       setRulesMessage("没有可加入的窗口标题");
       return;
     }
-    setAppSettings((prev) => ({ ...prev, excludedWindowTitles: appendUniqueRule(prev.excludedWindowTitles, info.title) }));
-    setRulesMessage("已加入排除标题，记得保存策略");
+    const nextRules = appendUniqueRule(appSettings.excludedWindowTitles, info.title);
+    if (nextRules === appSettings.excludedWindowTitles) {
+      setRulesMessage("该标题已在排除列表中");
+      return;
+    }
+    persistSettings({ ...appSettings, excludedWindowTitles: nextRules }, appSettings, setRulesMessage);
+    setRulesMessage("已加入排除标题");
   };
 
   const runCleanup = async () => {
@@ -466,7 +520,7 @@ export default function Settings({ onBack }: SettingsProps) {
       setStats(result || DEFAULT_STATS);
       setStorageMessage("清理完成");
     } catch (err: any) {
-      setStorageMessage(err?.message || "清理失败");
+      setStorageMessage(errText(err, "清理失败"));
     } finally {
       setCleanupRunning(false);
     }
@@ -482,7 +536,7 @@ export default function Settings({ onBack }: SettingsProps) {
       const compacted = dbDelta > 0 ? `，回收 ${formatBytes(dbDelta)}` : "";
       setStorageMessage(`已修复，移除 ${result?.missingImagesRemoved || 0} 条缺失图片记录${compacted}`);
     } catch (err: any) {
-      setStorageMessage(err?.message || "修复失败");
+      setStorageMessage(errText(err, "修复失败"));
     } finally {
       setMaintenanceRunning(false);
     }
@@ -494,7 +548,7 @@ export default function Settings({ onBack }: SettingsProps) {
     try {
       await OpenDataDir();
     } catch (err: any) {
-      setAppMessage(err?.message || "打开数据目录失败");
+      setAppMessage(errText(err, "打开数据目录失败"));
     } finally {
       setOpeningDataDir(false);
     }
@@ -512,7 +566,7 @@ export default function Settings({ onBack }: SettingsProps) {
         setAppMessage(`已导出 ${result?.clips || 0} 条记录、${result?.images || 0} 个图片${skipped}`);
       }
     } catch (err: any) {
-      setAppMessage(err?.message || "导出失败");
+      setAppMessage(errText(err, "导出失败"));
     } finally {
       setBackupRunning(false);
     }
@@ -532,7 +586,7 @@ export default function Settings({ onBack }: SettingsProps) {
         setAppMessage(`已导入 ${result?.clips || 0} 条新记录、${result?.settings || 0} 项设置${skipped}`);
       }
     } catch (err: any) {
-      setAppMessage(err?.message || "导入失败");
+      setAppMessage(errText(err, "导入失败"));
     } finally {
       setImportRunning(false);
     }
@@ -544,11 +598,11 @@ export default function Settings({ onBack }: SettingsProps) {
     try {
       const path = await SelectAutoBackupDir();
       if (path) {
-        setAppSettings((prev) => ({ ...prev, autoBackupDir: path }));
-        setAppMessage("已选择自动备份目录，记得保存策略");
+        persistSettings({ ...appSettings, autoBackupDir: path }, appSettings, setAppMessage);
+        setAppMessage("已选择自动备份目录");
       }
     } catch (err: any) {
-      setAppMessage(err?.message || "选择自动备份目录失败");
+      setAppMessage(errText(err, "选择自动备份目录失败"));
     } finally {
       setSelectingBackupDir(false);
     }
@@ -564,7 +618,7 @@ export default function Settings({ onBack }: SettingsProps) {
       const skipped = result?.skippedImages ? `，跳过 ${result.skippedImages} 个图片` : "";
       setAppMessage(`已自动备份 ${result?.clips || 0} 条记录：${result?.path || ""}${skipped}`);
     } catch (err: any) {
-      setAppMessage(err?.message || "自动备份失败");
+      setAppMessage(errText(err, "自动备份失败"));
     } finally {
       setAutoBackupRunning(false);
     }
@@ -581,7 +635,7 @@ export default function Settings({ onBack }: SettingsProps) {
         setAppMessage(`已导出诊断包：${result?.files || 0} 个文件，日志 ${formatBytes(result?.logBytes || 0)}`);
       }
     } catch (err: any) {
-      setAppMessage(err?.message || "导出诊断包失败");
+      setAppMessage(errText(err, "导出诊断包失败"));
     } finally {
       setDiagnosticsRunning(false);
     }
@@ -596,7 +650,7 @@ export default function Settings({ onBack }: SettingsProps) {
       setUpdateResult(result || null);
       setAppMessage(result?.message || "检查完成");
     } catch (err: any) {
-      setAppMessage(err?.message || "检查更新失败");
+      setAppMessage(errText(err, "检查更新失败"));
     } finally {
       setUpdateChecking(false);
     }
@@ -615,7 +669,7 @@ export default function Settings({ onBack }: SettingsProps) {
         setAppMessage(`已下载 ${formatBytes(result?.bytes || 0)}${verified}：${result?.path || ""}`);
       }
     } catch (err: any) {
-      setAppMessage(err?.message || "下载更新包失败");
+      setAppMessage(errText(err, "下载更新包失败"));
     } finally {
       setUpdateDownloading(false);
     }
@@ -689,6 +743,37 @@ export default function Settings({ onBack }: SettingsProps) {
         </div>
 
         <div className="settings-section">
+          <div className="section-label">外观</div>
+          <div className="section-card">
+            <div className="setting-row">
+              <div>
+                <div className="hotkey-label">主题</div>
+                <div className="hotkey-description">深色、浅色或跟随 Windows 系统</div>
+              </div>
+              <div className="theme-options">
+                {([["dark", "深色"], ["light", "浅色"], ["system", "跟随系统"]] as const).map(([value, label]) => (
+                  <button
+                    key={value}
+                    className={`btn theme-option ${appSettings.theme === value ? "active" : ""}`}
+                    onClick={() => {
+                      if (appSettings.theme === value) return;
+                      const prevTheme = appSettings.theme;
+                      applyThemeNow(value);
+                      persistSettings({ ...appSettings, theme: value }, appSettings, (msg) => {
+                        applyThemeNow(prevTheme);
+                        setAppMessage(msg);
+                      });
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-section">
           <div className="section-label">记录</div>
           <div className="section-card">
             <label className="setting-row">
@@ -751,6 +836,7 @@ export default function Settings({ onBack }: SettingsProps) {
                 value={formatRuleList(appSettings.excludedApps)}
                 placeholder={"1Password.exe\nKeePassXC.exe"}
                 onChange={(e) => updateRuleListSetting("excludedApps", e.target.value)}
+                onBlur={() => commitEditedSettings(setRulesMessage)}
               />
             </div>
             <div className="setting-row stack">
@@ -765,6 +851,7 @@ export default function Settings({ onBack }: SettingsProps) {
                 value={formatRuleList(appSettings.excludedWindowTitles)}
                 placeholder={"密码\nSecret"}
                 onChange={(e) => updateRuleListSetting("excludedWindowTitles", e.target.value)}
+                onBlur={() => commitEditedSettings(setRulesMessage)}
               />
             </div>
             <div className="target-rule-panel">
@@ -797,6 +884,8 @@ export default function Settings({ onBack }: SettingsProps) {
                 max={5000}
                 value={appSettings.minTextLength}
                 onChange={(e) => updateNumberSetting("minTextLength", e.target.value)}
+                onBlur={() => commitEditedSettings(setRulesMessage)}
+                onKeyDown={blurOnEnter}
               />
             </label>
             <label className="setting-row">
@@ -841,6 +930,8 @@ export default function Settings({ onBack }: SettingsProps) {
                 max={10000}
                 value={appSettings.maxClips}
                 onChange={(e) => updateNumberSetting("maxClips", e.target.value)}
+                onBlur={() => commitEditedSettings(setSettingsMessage)}
+                onKeyDown={blurOnEnter}
               />
             </label>
             <label className="setting-row compact">
@@ -855,6 +946,8 @@ export default function Settings({ onBack }: SettingsProps) {
                 max={3650}
                 value={appSettings.retentionDays}
                 onChange={(e) => updateNumberSetting("retentionDays", e.target.value)}
+                onBlur={() => commitEditedSettings(setSettingsMessage)}
+                onKeyDown={blurOnEnter}
               />
             </label>
             <label className="setting-row compact">
@@ -869,14 +962,15 @@ export default function Settings({ onBack }: SettingsProps) {
                 max={102400}
                 value={appSettings.maxImageStorageMB}
                 onChange={(e) => updateNumberSetting("maxImageStorageMB", e.target.value)}
+                onBlur={() => commitEditedSettings(setSettingsMessage)}
+                onKeyDown={blurOnEnter}
               />
             </label>
-            <div className="settings-actions inline">
-              {settingsMessage && <span className="save-message">{settingsMessage}</span>}
-              <button className="btn primary" onClick={saveAppSettings} disabled={settingsSaving}>
-                {settingsSaving ? "保存中..." : "保存策略"}
-              </button>
-            </div>
+            {settingsMessage && (
+              <div className="settings-actions inline">
+                <span className="save-message">{settingsMessage}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1018,6 +1112,8 @@ export default function Settings({ onBack }: SettingsProps) {
                 value={appSettings.updateManifestURL || ""}
                 placeholder="https://example.com/clipbox/release-manifest.json"
                 onChange={(e) => updateStringSetting("updateManifestURL", e.target.value)}
+                onBlur={() => commitEditedSettings(setAppMessage)}
+                onKeyDown={blurOnEnter}
               />
               <div className="update-actions">
                 <button className="btn" onClick={checkForUpdates} disabled={updateChecking}>
@@ -1078,6 +1174,8 @@ export default function Settings({ onBack }: SettingsProps) {
                   value={appSettings.autoBackupDir || ""}
                   placeholder="选择一个本地备份目录"
                   onChange={(e) => updateStringSetting("autoBackupDir", e.target.value)}
+                  onBlur={() => commitEditedSettings(setAppMessage)}
+                  onKeyDown={blurOnEnter}
                 />
                 <button className="btn" onClick={selectAutoBackupDir} disabled={selectingBackupDir}>
                   {selectingBackupDir ? "选择中..." : "选择"}
@@ -1097,6 +1195,8 @@ export default function Settings({ onBack }: SettingsProps) {
                   max={365}
                   value={appSettings.autoBackupIntervalDays}
                   onChange={(e) => updateNumberSetting("autoBackupIntervalDays", e.target.value)}
+                  onBlur={() => commitEditedSettings(setAppMessage)}
+                  onKeyDown={blurOnEnter}
                   title="间隔天数"
                 />
                 <input
@@ -1106,6 +1206,8 @@ export default function Settings({ onBack }: SettingsProps) {
                   max={100}
                   value={appSettings.autoBackupMaxFiles}
                   onChange={(e) => updateNumberSetting("autoBackupMaxFiles", e.target.value)}
+                  onBlur={() => commitEditedSettings(setAppMessage)}
+                  onKeyDown={blurOnEnter}
                   title="保留数量"
                 />
                 <button className="btn" onClick={runAutoBackupNow} disabled={autoBackupRunning || !appSettings.autoBackupDir}>

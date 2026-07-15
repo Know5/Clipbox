@@ -225,9 +225,7 @@ func (a *App) UpdateClipMetadata(id int64, note, tags string) (clipboard.ClipEnt
 	if entry == nil {
 		return clipboard.ClipEntry{}, fmt.Errorf("clip %d not found", id)
 	}
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "clips:changed")
-	}
+	// 前端拿到返回值后本地更新对应条目，无需广播 clips:changed 触发整页重载。
 	a.logInfof("updated clip metadata id=%d noteLen=%d tagsLen=%d", id, len([]rune(entry.Note)), len([]rune(entry.Tags)))
 	return sanitizeClipDetails(*entry), nil
 }
@@ -675,6 +673,8 @@ func (a *App) ImportBackup() (storage.BackupStats, error) {
 }
 
 func (a *App) applyImportedRuntimeSettings() {
+	// 备份导入直接写了 settings 表，缓存必须失效重建。
+	a.invalidateSettingsCache()
 	if a.hotkeyManager != nil {
 		config := a.GetHotkeySettings()
 		_ = a.hotkeyManager.Rebind(uint32(config.Modifiers), uint32(config.KeyCode))

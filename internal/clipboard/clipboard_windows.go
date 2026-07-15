@@ -43,6 +43,7 @@ var (
 	procLstrcpy                       = kernel32.NewProc("lstrcpyW")
 	procPostThreadMessageW            = user32.NewProc("PostThreadMessageW")
 	procGetWindowThreadProcessId      = user32.NewProc("GetWindowThreadProcessId")
+	procRegisterClipboardFormat       = user32.NewProc("RegisterClipboardFormatW")
 )
 
 const (
@@ -95,6 +96,91 @@ func MarkSelfWrite() {
 // write failed before Windows could emit a clipboard update.
 func ClearSelfWrite() {
 	atomic.StoreInt32(&selfWrite, 0)
+}
+
+// PanicLogger is set by the host application to receive panic reports from
+// internal goroutines and syscall callbacks. If nil, panics are silently
+// recovered.
+var PanicLogger func(format string, args ...interface{})
+
+func recoverPanic(name string) {
+	if r := recover(); r != nil {
+		if PanicLogger != nil {
+			PanicLogger("panic in %s: %v", name, r)
+		}
+	}
+}
+
+// Windows 约定的剪贴板隐私格式：密码管理器（1Password、KeePass、Bitwarden 等）
+// 复制敏感内容时会附带这些格式，剪贴板管理器应跳过记录。
+var privacyFormatsOnce sync.Once
+var (
+	fmtExcludeMonitor    uintptr // ExcludeClipboardContentFromMonitorProcessing：存在即排除
+	fmtCanIncludeHistory uintptr // CanIncludeInClipboardHistory：DWORD 值为 0 表示不进入历史
+	fmtViewerIgnore      uintptr // Clipboard Viewer Ignore：旧约定（Ditto 等），存在即排除
+)
+
+func registerPrivacyFormats() {
+	privacyFormatsOnce.Do(func() {
+		fmtExcludeMonitor = registerClipboardFormat("ExcludeClipboardContentFromMonitorProcessing")
+		fmtCanIncludeHistory = registerClipboardFormat("CanIncludeInClipboardHistory")
+		fmtViewerIgnore = registerClipboardFormat("Clipboard Viewer Ignore")
+	})
+}
+
+func registerClipboardFormat(name string) uintptr {
+	ptr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0
+	}
+	id, _, _ := procRegisterClipboardFormat.Call(uintptr(unsafe.Pointer(ptr)))
+	return id
+}
+
+// clipboardMarkedPrivate reports whether the current clipboard content is
+// marked by its source app as excluded from history/monitoring.
+// Caller must hold the clipboard open.
+func clipboardMarkedPrivate() bool {
+	registerPrivacyFormats()
+	if fmtExcludeMonitor != 0 {
+		if ret, _, _ := procIsClipboardFormatAvailable.Call(fmtExcludeMonitor); ret != 0 {
+			return true
+		}
+	}
+	if fmtViewerIgnore != 0 {
+		if ret, _, _ := procIsClipboardFormatAvailable.Call(fmtViewerIgnore); ret != 0 {
+			return true
+		}
+	}
+	if fmtCanIncludeHistory != 0 {
+		if ret, _, _ := procIsClipboardFormatAvailable.Call(fmtCanIncludeHistory); ret != 0 {
+			if value, ok := readClipboardDword(fmtCanIncludeHistory); ok && value == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func readClipboardDword(format uintptr) (uint32, bool) {
+	h, _, _ := procGetClipboardData.Call(format)
+	if h == 0 {
+		return 0, false
+	}
+	sz, _, _ := procGlobalSize.Call(h)
+	if sz < 4 {
+		return 0, false
+	}
+	ptr, _, _ := procGlobalLock.Call(h)
+	if ptr == 0 {
+		return 0, false
+	}
+	defer procGlobalUnlock.Call(h)
+	data := byteSliceFromPointer(ptr, 4)
+	if len(data) < 4 {
+		return 0, false
+	}
+	return uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24, true
 }
 
 type Watcher struct {
@@ -164,6 +250,7 @@ var globalWatcher *Watcher
 
 func clipboardWndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr {
 	if umsg == WM_CLIPBOARDUPDATE {
+		defer recoverPanic("clipboardWndProc")
 		// Skip updates caused by our own clipboard writes.
 		if atomic.CompareAndSwapInt32(&selfWrite, 1, 0) {
 			return 0
@@ -205,6 +292,7 @@ func (w *Watcher) Stop() {
 }
 
 func (w *Watcher) messageLoop(initCh chan<- error) {
+	defer recoverPanic("clipboard:messageLoop")
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -261,6 +349,11 @@ func readClipboard() *ClipEntry {
 		return nil
 	}
 	defer procCloseClipboard.Call()
+
+	// 尊重来源应用的隐私标记（密码管理器等），跳过记录。
+	if clipboardMarkedPrivate() {
+		return nil
+	}
 
 	if ret, _, _ := procIsClipboardFormatAvailable.Call(CF_DIB); ret != 0 {
 		return readImageFromClipboard()

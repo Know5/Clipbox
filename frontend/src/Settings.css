@@ -63,7 +63,7 @@
 }
 
 .settings-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
@@ -308,8 +308,8 @@
   min-width: 28px;
   height: 24px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3), inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
   font-size: 11px;
   font-weight: 600;
@@ -362,7 +362,7 @@
   height: 20px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-active);
   position: relative;
   cursor: pointer;
   flex-shrink: 0;
@@ -377,7 +377,7 @@
   top: 1px;
   left: 1px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.86);
+  background: var(--knob);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   transition: transform var(--transition-fast);
 }
@@ -440,7 +440,7 @@
   padding: 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--bg-faint);
 }
 
 .target-rule-info {
@@ -592,7 +592,7 @@
 .btn:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-strong);
 }
 
 .btn:active {
@@ -669,7 +669,7 @@
   margin-top: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-faint);
   border: 1px solid var(--border-subtle);
 }
 
@@ -682,4 +682,17 @@
 
 .section-info p + p {
   margin-top: 4px;
+}
+
+/* ── Theme selector ── */
+.theme-options {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.theme-options .btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }

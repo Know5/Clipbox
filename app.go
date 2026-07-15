@@ -29,6 +29,8 @@ type App struct {
 	lastTarget     uintptr
 	lastToggle     time.Time
 	mu             sync.Mutex
+	settingsMu     sync.Mutex
+	settingsCache  *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
 	foregroundInfo func() windowutil.ForegroundInfo
 	windowInfo     func(hwnd uintptr) windowutil.ForegroundInfo
 }
@@ -46,6 +48,10 @@ func NewApp(dataDir string, startHidden bool) *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.logInfof("startup app=%s version=%s dataDir=%s startHidden=%v", appName, appVersion, a.dataDir, a.startHidden)
+
+	// Wire panic loggers so internal packages can report panics via the app log.
+	clipboard.PanicLogger = a.logErrorf
+	hotkey.PanicLogger = a.logErrorf
 
 	store, err := storage.NewStore(a.dataDir)
 	if err != nil {
@@ -77,8 +83,9 @@ func (a *App) startup(ctx context.Context) {
 		if entry.Type == "image" {
 			entry.Content = ""
 		}
+		// clip:new 已携带完整条目，前端会增量合并；
+		// 不再广播 clips:changed，避免把已翻页的列表重置回第一页。
 		runtime.EventsEmit(ctx, "clip:new", entry)
-		runtime.EventsEmit(ctx, "clips:changed")
 	})
 
 	if err := a.watcher.Start(); err != nil {
@@ -116,17 +123,20 @@ func (a *App) startup(ctx context.Context) {
 		})
 	}
 
-	go func() {
+	go a.superviseLoop("hotkey", func() {
 		for range a.hotkeyManager.Events {
 			a.toggleWindow()
 		}
-	}()
+	})
 
 	a.mu.Lock()
 	a.windowVisible = !a.startHidden
 	a.mu.Unlock()
 	a.startTray()
-	go a.maybeRunAutoBackup()
+	go func() {
+		defer a.recoverGoroutine("autoBackup")
+		a.maybeRunAutoBackup()
+	}()
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -242,7 +252,7 @@ func (a *App) startTray() {
 	}
 	a.trayController = controller
 	a.updateTrayState()
-	go a.handleTrayActions(controller)
+	go a.superviseLoop("tray", func() { a.handleTrayActions(controller) })
 	a.logInfof("started tray")
 }
 
@@ -292,12 +302,19 @@ func (a *App) setCapturePaused(paused bool) error {
 	if err := a.store.SetSetting("capture_paused", strconv.FormatBool(paused)); err != nil {
 		return err
 	}
+	a.invalidateSettingsCache()
 	settings := a.loadAppSettings()
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "settings:updated", settings)
 	}
 	a.updateTrayState()
 	return nil
+}
+
+func (a *App) invalidateSettingsCache() {
+	a.settingsMu.Lock()
+	a.settingsCache = nil
+	a.settingsMu.Unlock()
 }
 
 func (a *App) updateTrayState() {
