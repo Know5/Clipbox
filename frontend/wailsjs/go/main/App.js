@@ -10,6 +10,10 @@ export function ClearAll() {
   return window['go']['main']['App']['ClearAll']();
 }
 
+export function CopyAndPaste(arg1) {
+  return window['go']['main']['App']['CopyAndPaste'](arg1);
+}
+
 export function CopyToClipboard(arg1) {
   return window['go']['main']['App']['CopyToClipboard'](arg1);
 }

@@ -137,6 +137,14 @@ func (a *App) startup(ctx context.Context) {
 		defer a.recoverGoroutine("autoBackup")
 		a.maybeRunAutoBackup()
 	}()
+
+	// Pre-warm WebView2 compositor so the first hotkey press feels instant.
+	// The first WindowShow after process start triggers an expensive first
+	// paint (~100-150ms). Absorb that cost here instead.
+	if a.startHidden {
+		runtime.WindowShow(a.ctx)
+		runtime.WindowHide(a.ctx)
+	}
 }
 
 func (a *App) shutdown(ctx context.Context) {

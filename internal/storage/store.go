@@ -187,13 +187,32 @@ func (s *Store) ensureSearchIndex() {
 			return
 		}
 	}
-	if err := s.rebuildSearchIndex(); err != nil {
+	if err := s.syncSearchIndex(); err != nil {
 		s.ftsAvailable = false
 		return
 	}
 	s.ftsAvailable = true
 }
 
+// syncSearchIndex inserts only rows missing from the FTS index.
+	// Called on every startup - fast incremental, never a full rebuild.
+func (s *Store) syncSearchIndex() error {
+	_, err := s.db.Exec(`
+		INSERT INTO clips_fts(rowid, content, source_app, source_title, note, tags)
+		SELECT id,
+		       CASE WHEN type = 'text' THEN content ELSE '' END,
+		       source_app,
+		       source_title,
+		       note,
+		       tags
+		  FROM clips
+		 WHERE id NOT IN (SELECT rowid FROM clips_fts)
+	`)
+	return err
+}
+
+// rebuildSearchIndex does a full FTS5 rebuild. Used only by manual
+	// repair storage - user-triggered, expected to be slow.
 func (s *Store) rebuildSearchIndex() error {
 	if _, err := s.db.Exec(`DELETE FROM clips_fts`); err != nil {
 		return err

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
-import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip } from "../wailsjs/go/main/App";
+import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, CopyAndPaste, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip } from "../wailsjs/go/main/App";
 import { EventsOn, WindowMinimise } from "../wailsjs/runtime/runtime";
 import Settings from "./Settings";
 import "./App.css";
@@ -310,6 +310,7 @@ interface ClipItemProps {
   deleting: boolean;
   onHover: (id: number) => void;
   onCopy: (id: number) => void;
+  onDouble: (id: number) => void;
   onPin: (id: number) => void;
   onDelete: (id: number) => void;
   onDetail: (id: number) => void;
@@ -326,17 +327,33 @@ const ClipItem = memo(function ClipItem({
   deleting,
   onHover,
   onCopy,
+  onDouble,
   onPin,
   onDelete,
   onDetail,
 }: ClipItemProps) {
+  const clickTimer = useRef<number>(0);
+
+  const handleClick = () => {
+    if (clickTimer.current) {
+      window.clearTimeout(clickTimer.current);
+      clickTimer.current = 0;
+      onDouble(clip.id);
+      return;
+    }
+    clickTimer.current = window.setTimeout(() => {
+      clickTimer.current = 0;
+      onCopy(clip.id);
+    }, 300);
+  };
+
   const sourceLabel = clipSourceLabel(clip);
   return (
     <div
       data-clip-id={clip.id}
       className={`clip-item ${clip.pinned ? "pinned" : ""} ${selected ? "selected" : ""} ${copyStatus ? (copyStatus.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
       onMouseEnter={() => onHover(clip.id)}
-      onClick={() => onCopy(clip.id)}
+      onClick={handleClick}
     >
       <div className="clip-head">
         <span className={`dot ${clip.type}`} />
@@ -565,8 +582,6 @@ function App() {
     });
     const unsub2 = EventsOn("window:shown", () => {
       setTimeout(() => searchRef.current?.focus(), 100);
-      // Refresh list when window is shown in case clips were added externally.
-      loadClipPage(0, false, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
     });
     const unsub3 = EventsOn("clips:changed", () => {
       const activeSearch = searchValueRef.current.trim();
@@ -648,6 +663,17 @@ function App() {
     }
   }, [showCopyFeedback]);
 
+
+  const handleDoubleClick = useCallback(async (id: number) => {
+    try {
+      await CopyAndPaste(id);
+      setListError("");
+      showCopyFeedback(id, "已粘贴");
+    } catch (e) {
+      console.error(e);
+      showCopyFeedback(id, "粘贴失败", true);
+    }
+  }, [showCopyFeedback]);
   const handleHover = useCallback((id: number) => {
     setSelectedClipId(id);
   }, []);
@@ -998,6 +1024,7 @@ function App() {
             onCopy={handleCopy}
             onPin={handlePin}
             onDelete={requestDelete}
+            onDouble={handleDoubleClick}
             onDetail={handleOpenDetail}
           />
         ))}

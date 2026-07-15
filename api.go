@@ -424,37 +424,44 @@ func isFilenameSafeRune(r rune) bool {
 	}
 }
 
-func (a *App) CopyToClipboard(id int64) error {
+// copyEntryToClipboard writes a clip entry's content to the Windows clipboard.
+// Returns the entry so callers can use it for further actions (paste, etc.).
+func (a *App) copyEntryToClipboard(id int64) (*clipboard.ClipEntry, error) {
 	entry, err := a.store.GetByID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if entry == nil {
-		return fmt.Errorf("clip %d not found", id)
+		return nil, fmt.Errorf("clip %d not found", id)
 	}
 
-	// Mark that WE are writing to the clipboard so the watcher ignores
-	// the next clipboard update. This prevents a feedback loop.
 	clipboard.MarkSelfWrite()
 
 	if entry.Type == "text" {
 		if err := clipboard.WriteTextToClipboard(entry.Content); err != nil {
 			clipboard.ClearSelfWrite()
-			return err
+			return nil, err
 		}
 	} else if entry.Type == "image" {
 		dibData, err := loadImageDib(entry.Content)
 		if err != nil {
 			clipboard.ClearSelfWrite()
-			return err
+			return nil, err
 		}
 		if err := clipboard.WriteDibToClipboard(dibData); err != nil {
 			clipboard.ClearSelfWrite()
-			return err
+			return nil, err
 		}
 	} else {
 		clipboard.ClearSelfWrite()
-		return fmt.Errorf("unsupported clip type: %s", entry.Type)
+		return nil, fmt.Errorf("unsupported clip type: %s", entry.Type)
+	}
+	return entry, nil
+}
+
+func (a *App) CopyToClipboard(id int64) error {
+	if _, err := a.copyEntryToClipboard(id); err != nil {
+		return err
 	}
 
 	autoPaste := a.loadAppSettings().AutoPaste
@@ -469,6 +476,17 @@ func (a *App) CopyToClipboard(id int64) error {
 			a.pasteToLastTarget()
 		}
 	}()
+	return nil
+}
+
+// CopyAndPaste copies the clip AND immediately pastes it into the
+// previously active window. Unlike CopyToClipboard, this always pastes
+// regardless of the auto-paste setting and does not hide the window.
+func (a *App) CopyAndPaste(id int64) error {
+	if _, err := a.copyEntryToClipboard(id); err != nil {
+		return err
+	}
+	go a.pasteToLastTarget()
 	return nil
 }
 

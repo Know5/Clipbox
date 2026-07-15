@@ -218,7 +218,7 @@ body {
 
 .settings-btn:active {
   background: var(--bg-active);
-  transform: scale(0.92);
+  transform: scale(0.94);
 }
 
 /* ── Search Bar ── */
@@ -239,7 +239,7 @@ body {
   border-color: var(--border-focus);
   box-shadow:
     inset 0 1px 3px rgba(0, 0, 0, 0.3),
-    0 0 0 3px var(--accent-glow);
+    0 0 0 2px var(--accent-glow);
 }
 
 .search-icon {
@@ -286,7 +286,7 @@ body {
   border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   font-family: var(--font-sans);
   cursor: pointer;
@@ -311,7 +311,7 @@ body {
   border-color: var(--accent);
   color: #fff;
   font-weight: 600;
-  box-shadow: 0 0 0 3px var(--accent-glow), 0 1px 4px rgba(88, 166, 255, 0.3);
+  box-shadow: 0 0 0 2px var(--accent-glow), 0 1px 4px rgba(88, 166, 255, 0.3);
 }
 
 .chip.danger {
@@ -413,7 +413,7 @@ body {
 .tag-chip strong {
   flex-shrink: 0;
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -492,7 +492,7 @@ body {
   gap: 10px;
   padding: 12px 6px 16px;
   color: var(--text-tertiary);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .load-more-btn {
@@ -503,7 +503,7 @@ body {
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
   font-family: var(--font-sans);
   cursor: pointer;
   transition: all var(--transition-fast);
@@ -520,46 +520,18 @@ body {
 }
 
 /* ── Clip Items ── */
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 .clip-item {
-  padding: 10px 12px;
-  margin: 0 0 4px;
+  padding: 12px 14px;
+  margin: 0 0 2px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    transform var(--transition-fast),
-    box-shadow var(--transition-fast),
-    border-color var(--transition-fast);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
   border: 1px solid transparent;
-  animation: slideIn 0.3s ease both;
   position: relative;
 }
 
-.clip-item:nth-child(1) { animation-delay: 0s; }
-.clip-item:nth-child(2) { animation-delay: 0.03s; }
-.clip-item:nth-child(3) { animation-delay: 0.06s; }
-.clip-item:nth-child(4) { animation-delay: 0.09s; }
-.clip-item:nth-child(5) { animation-delay: 0.12s; }
-.clip-item:nth-child(6) { animation-delay: 0.15s; }
-.clip-item:nth-child(7) { animation-delay: 0.18s; }
-.clip-item:nth-child(8) { animation-delay: 0.21s; }
-.clip-item:nth-child(9) { animation-delay: 0.24s; }
-.clip-item:nth-child(10) { animation-delay: 0.27s; }
-
 .clip-item:hover {
   background: var(--bg-hover);
-  transform: translateY(-1px);
   box-shadow: var(--shadow-hover);
   border-color: var(--border);
 }
@@ -576,7 +548,6 @@ body {
 }
 
 .clip-item:active {
-  transform: translateY(0) scale(0.995);
   box-shadow: var(--shadow-card);
 }
 
@@ -672,8 +643,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-tertiary);
-  font-size: 10.5px;
-  line-height: 1;
+  font-size: 11px;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
@@ -686,8 +656,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--accent);
-  font-size: 10.5px;
-  line-height: 1;
+  font-size: 11px;
 }
 
 .clip-copy-status {
@@ -697,8 +666,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--success);
-  font-size: 10.5px;
-  line-height: 1;
+  font-size: 11px;
 }
 
 .clip-copy-status.error {
@@ -712,8 +680,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--danger);
-  font-size: 10.5px;
-  line-height: 1;
+  font-size: 11px;
 }
 
 .clip-actions {
@@ -753,7 +720,7 @@ body {
 }
 
 .act:active {
-  transform: scale(0.9);
+  transform: scale(0.94);
 }
 
 .act.on {
@@ -849,7 +816,7 @@ body {
   align-items: center;
   gap: 8px;
   color: var(--text-primary);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -977,7 +944,7 @@ body {
   border: 1px solid var(--border);
   background: var(--bg-subtle);
   color: var(--text-primary);
-  font: 12.5px/1.55 var(--font-sans);
+  font: 13px/1.55 var(--font-sans);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1086,7 +1053,7 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--text-tertiary);
   font-weight: 400;
   white-space: nowrap;
@@ -1098,7 +1065,7 @@ kbd {
   border: 1px solid var(--border-strong);
   background: var(--bg-hover);
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 0.5px 0 var(--bg-hover);
-  font-size: 10.5px;
+  font-size: 11px;
   font-family: var(--font-sans);
   color: var(--text-secondary);
   font-weight: 500;
@@ -1175,7 +1142,7 @@ kbd {
   position: absolute;
   bottom: 4px;
   right: 6px;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-tertiary);
   background: var(--scrim);
   padding: 2px 6px;
@@ -1212,7 +1179,7 @@ kbd {
 }
 
 .window-pin-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.94);
 }
 
 .window-pin-btn.pinned {

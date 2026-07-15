@@ -8,6 +8,8 @@ export function CheckForUpdates(arg1:string):Promise<main.UpdateCheckResult>;
 
 export function ClearAll():Promise<storage.ClearResult>;
 
+export function CopyAndPaste(arg1:number):Promise<void>;
+
 export function CopyToClipboard(arg1:number):Promise<void>;
 
 export function DeleteClip(arg1:number):Promise<void>;
