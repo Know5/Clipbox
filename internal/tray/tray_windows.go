@@ -45,6 +45,7 @@ const (
 	wmLButtonUp     = 0x0202
 	wmLButtonDblClk = 0x0203
 	wmRButtonUp     = 0x0205
+	wmContextMenu   = 0x007B // right-click with NOTIFYICON_VERSION_4
 
 	nimAdd        = 0x00000000
 	nimModify     = 0x00000001
@@ -265,10 +266,10 @@ func trayWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 
 	switch message {
 	case wmTrayCallback:
-		switch uint32(lParam) {
+		switch uint32(lParam & 0xFFFF) {
 		case wmLButtonUp, wmLButtonDblClk:
 			c.dispatch(ActionShow)
-		case wmRButtonUp:
+		case wmRButtonUp, wmContextMenu:
 			c.showMenu()
 		}
 		return 0
