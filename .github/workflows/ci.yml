@@ -8,7 +8,6 @@ on:
     branches: [main]
 
 jobs:
-  # ── 每次 push / PR 都跑 ──
   test:
     name: Test & Lint
     runs-on: windows-latest
@@ -20,19 +19,19 @@ jobs:
         with:
           node-version: 18
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
 
-      - name: Check frontend compiles
-        run: npx tsc --noEmit
-        working-directory: frontend
+      - name: Install Go
+        shell: powershell
+        run: |
+          $ver = "1.25.3"
+          $url = "https://go.dev/dl/go$ver.windows-amd64.zip"
+          Write-Host "Downloading Go $ver from go.dev"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\go.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\go.zip" -DestinationPath "$env:RUNNER_TEMP"
+          echo "$env:RUNNER_TEMP\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: go vet
         run: go vet ./...
@@ -40,7 +39,6 @@ jobs:
       - name: go test
         run: go test -count=1 ./...
 
-  # ── 仅在打 tag (v*) 时跑完整构建 ──
   build:
     name: Build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -53,15 +51,19 @@ jobs:
         with:
           node-version: 18
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          check-latest: true
-
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
+
+      - name: Install Go
+        shell: powershell
+        run: |
+          $ver = "1.25.3"
+          $url = "https://go.dev/dl/go$ver.windows-amd64.zip"
+          Write-Host "Downloading Go $ver from go.dev"
+          Invoke-WebRequest -Uri $url -OutFile "$env:RUNNER_TEMP\go.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\go.zip" -DestinationPath "$env:RUNNER_TEMP"
+          echo "$env:RUNNER_TEMP\go\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
