@@ -195,7 +195,7 @@ func (s *Store) ensureSearchIndex() {
 }
 
 // syncSearchIndex inserts only rows missing from the FTS index.
-	// Called on every startup - fast incremental, never a full rebuild.
+// Called on every startup - fast incremental, never a full rebuild.
 func (s *Store) syncSearchIndex() error {
 	_, err := s.db.Exec(`
 		INSERT INTO clips_fts(rowid, content, source_app, source_title, note, tags)
