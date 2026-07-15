@@ -70,6 +70,7 @@ export namespace main {
 	    recordSourceInfo: boolean;
 	    startAtLogin: boolean;
 	    autoPaste: boolean;
+	    theme: string;
 	    minTextLength: number;
 	    maxClips: number;
 	    retentionDays: number;
@@ -94,6 +95,7 @@ export namespace main {
 	        this.recordSourceInfo = source["recordSourceInfo"];
 	        this.startAtLogin = source["startAtLogin"];
 	        this.autoPaste = source["autoPaste"];
+	        this.theme = source["theme"];
 	        this.minTextLength = source["minTextLength"];
 	        this.maxClips = source["maxClips"];
 	        this.retentionDays = source["retentionDays"];

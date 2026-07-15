@@ -4,6 +4,7 @@ import (
 	"embed"
 	"os"
 	"path/filepath"
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -26,6 +27,11 @@ func main() {
 	// Periodically force the Go runtime to return unused heap to the OS.
 	// Without this the working set can stay at peak levels even after GC.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				println("clipbox: panic in FreeOSMemory loop:", fmt.Sprint(r))
+			}
+		}()
 		for {
 			time.Sleep(30 * time.Second)
 			debug.FreeOSMemory()

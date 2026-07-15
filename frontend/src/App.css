@@ -30,6 +30,55 @@
   --font-sans: "ClipBox Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Themeable surfaces & details (dark defaults) */
+  --window-edge: rgba(255, 255, 255, 0.06);
+  --bg-faint: rgba(255, 255, 255, 0.02);
+  --bg-subtle: rgba(255, 255, 255, 0.03);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --scrollbar-thumb: rgba(255, 255, 255, 0.08);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.15);
+  --scrollbar-thumb-active: rgba(255, 255, 255, 0.22);
+  --media-bg: rgba(0, 0, 0, 0.22);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --layer-scrim: rgba(12, 12, 14, 0.72);
+  --knob: rgba(255, 255, 255, 0.86);
+}
+
+/* ── Light theme ── */
+:root[data-theme="light"] {
+  --bg-primary: rgb(246, 246, 248);
+  --bg-elevated: rgb(255, 255, 255);
+  --bg-input: rgba(0, 0, 0, 0.045);
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.08);
+  --border: rgba(0, 0, 0, 0.1);
+  --border-subtle: rgba(0, 0, 0, 0.05);
+  --border-focus: rgba(9, 105, 218, 0.45);
+  --text-primary: rgba(23, 23, 28, 0.95);
+  --text-secondary: rgba(23, 23, 28, 0.62);
+  --text-tertiary: rgba(23, 23, 28, 0.4);
+  --accent: #0969da;
+  --accent-soft: rgba(9, 105, 218, 0.12);
+  --accent-glow: rgba(9, 105, 218, 0.22);
+  --danger: #d93036;
+  --danger-soft: rgba(217, 48, 54, 0.1);
+  --success: #1a7f4e;
+  --purple: #8250df;
+  --purple-soft: rgba(130, 80, 223, 0.12);
+  --shadow-window: 0 24px 80px rgba(0, 0, 0, 0.16), 0 0 1px rgba(0, 0, 0, 0.25);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.1);
+  --window-edge: rgba(255, 255, 255, 0.75);
+  --bg-faint: rgba(0, 0, 0, 0.02);
+  --bg-subtle: rgba(0, 0, 0, 0.035);
+  --border-strong: rgba(0, 0, 0, 0.15);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.16);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.26);
+  --scrollbar-thumb-active: rgba(0, 0, 0, 0.36);
+  --media-bg: rgba(0, 0, 0, 0.05);
+  --scrim: rgba(0, 0, 0, 0.5);
+  --layer-scrim: rgba(248, 248, 250, 0.78);
+  --knob: #ffffff;
 }
 
 * {
@@ -40,7 +89,7 @@
 
 body {
   font-family: var(--font-sans);
-  background: transparent;
+  background: var(--bg-primary);
   color: var(--text-primary);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -57,7 +106,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.06) inset,
+    0 0 0 1px var(--window-edge) inset,
     var(--shadow-window);
   overflow: hidden;
   position: relative;
@@ -70,7 +119,7 @@ body {
   height: 38px;
   padding: 0 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-faint);
   flex-shrink: 0;
   position: relative;
   --wails-draggable: drag;
@@ -248,7 +297,7 @@ body {
 .chip:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-strong);
 }
 
 .chip:disabled {
@@ -277,8 +326,8 @@ body {
 
 .chip.danger.confirming {
   background: var(--danger-soft);
-  border-color: rgba(255, 107, 107, 0.45);
-  color: #fff;
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .clear-feedback {
@@ -334,7 +383,7 @@ body {
   padding: 0 9px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-subtle);
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-sans);
@@ -345,11 +394,11 @@ body {
 .tag-chip:hover {
   color: var(--text-primary);
   background: var(--bg-hover);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: var(--border-strong);
 }
 
 .tag-chip.active {
-  color: #fff;
+  color: var(--success);
   border-color: rgba(99, 230, 190, 0.38);
   background: rgba(99, 230, 190, 0.14);
 }
@@ -369,7 +418,7 @@ body {
 }
 
 .tag-chip.active strong {
-  color: rgba(255, 255, 255, 0.68);
+  color: var(--text-secondary);
 }
 
 /* ── Clip List ── */
@@ -389,17 +438,17 @@ body {
 }
 
 .clip-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
   transition: background 0.2s;
 }
 
 .clip-list:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--scrollbar-thumb-hover);
 }
 
 .clip-list::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.22);
+  background: var(--scrollbar-thumb-active);
 }
 
 /* ── Empty State ── */
@@ -622,12 +671,12 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: rgba(255, 255, 255, 0.46);
+  color: var(--text-tertiary);
   font-size: 10.5px;
   line-height: 1;
   padding: 2px 5px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-subtle);
 }
 
 .clip-tags {
@@ -694,7 +743,7 @@ body {
 }
 
 .act:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--bg-active);
   color: var(--text-primary);
 }
 
@@ -712,7 +761,7 @@ body {
 }
 
 .act.danger {
-  color: rgba(255, 255, 255, 0.58);
+  color: var(--text-secondary);
 }
 
 .act.danger:hover,
@@ -744,8 +793,8 @@ body {
   gap: 10px;
   padding: 10px 12px;
   border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px dashed rgba(255, 255, 255, 0.08);
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border);
   color: var(--text-tertiary);
   font-size: 12px;
   font-weight: 400;
@@ -753,7 +802,7 @@ body {
 }
 
 .clip-item:hover .image-card {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-hover);
 }
 
 /* ── Detail Panel ── */
@@ -765,7 +814,7 @@ body {
   align-items: stretch;
   justify-content: center;
   padding: 10px;
-  background: rgba(12, 12, 14, 0.72);
+  background: var(--layer-scrim);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -839,7 +888,7 @@ body {
 }
 
 .detail-body::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--border-strong);
   border-radius: 999px;
 }
 
@@ -911,12 +960,12 @@ body {
 .detail-metadata-editor input:focus,
 .detail-metadata-editor textarea:focus {
   border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-active);
 }
 
 .detail-metadata-editor input::placeholder,
 .detail-metadata-editor textarea::placeholder {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
 }
 
 .detail-text {
@@ -926,7 +975,7 @@ body {
   padding: 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--bg-subtle);
   color: var(--text-primary);
   font: 12.5px/1.55 var(--font-sans);
   white-space: pre-wrap;
@@ -937,7 +986,7 @@ body {
   min-height: 220px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.24);
+  background: var(--media-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1027,7 +1076,7 @@ body {
   gap: 10px;
   padding: 9px 16px;
   border-top: 1px solid var(--border-subtle);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-faint);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   flex-shrink: 0;
@@ -1046,9 +1095,9 @@ body {
 kbd {
   padding: 2px 5px;
   border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 0.5px 0 rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-hover);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 0.5px 0 var(--bg-hover);
   font-size: 10.5px;
   font-family: var(--font-sans);
   color: var(--text-secondary);
@@ -1062,7 +1111,7 @@ kbd {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--media-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1091,7 +1140,7 @@ kbd {
   align-items: center;
   justify-content: center;
   position: relative;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--bg-faint);
 }
 
 .clip-img-placeholder {
@@ -1114,7 +1163,7 @@ kbd {
 
 .clip-img-placeholder.clickable:hover {
   opacity: 0.8;
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--bg-subtle);
   border-radius: var(--radius-sm);
 }
 
@@ -1128,7 +1177,7 @@ kbd {
   right: 6px;
   font-size: 10px;
   color: var(--text-tertiary);
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--scrim);
   padding: 2px 6px;
   border-radius: 3px;
   opacity: 0;

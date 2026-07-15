@@ -265,6 +265,27 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
+// SetSettings writes multiple settings in a single transaction.
+func (s *Store) SetSettings(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for key, value := range values {
+		if _, err := tx.Exec(
+			"INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+			key, value,
+		); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func hashContent(content string) string {
 	return hashBytes([]byte(content))
 }
