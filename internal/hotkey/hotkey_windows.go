@@ -1,6 +1,7 @@
 package hotkey
 
 import (
+	"errors"
 	"fmt"
 	goruntime "runtime"
 	"sync"
@@ -26,6 +27,42 @@ const (
 	modNoRepeat = 0x4000
 	hotkeyID    = 1001
 )
+
+// RegisterHotkeyError 区分“被占用”和其它注册失败，便于上层给出可操作的提示。
+type RegisterHotkeyError struct {
+	Err      error
+	Occupied bool
+}
+
+func (e *RegisterHotkeyError) Error() string {
+	if e == nil || e.Err == nil {
+		return "热键注册失败"
+	}
+	if e.Occupied {
+		return "热键注册失败，该组合键可能已被其它软件占用: " + e.Err.Error()
+	}
+	return "热键注册失败: " + e.Err.Error()
+}
+
+func (e *RegisterHotkeyError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+// IsHotkeyOccupiedError 报告错误是否很可能由其它软件占用热键导致。
+func IsHotkeyOccupiedError(err error) bool {
+	var hotkeyErr *RegisterHotkeyError
+	if errors.As(err, &hotkeyErr) {
+		return hotkeyErr.Occupied
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno == 1409
+	}
+	return false
+}
 
 // Modifier key constants exported for use by other packages
 const (
@@ -87,10 +124,19 @@ func registerHotkey(modifiers, vk uint32) error {
 		return nil
 	}
 
+	var cause error
 	if fallbackErr != syscall.Errno(0) {
-		return fallbackErr
+		cause = fallbackErr
+	} else {
+		cause = err
 	}
-	return err
+	return &RegisterHotkeyError{Err: cause, Occupied: IsHotkeyOccupiedError(cause)}
+}
+func rebindRegistrationError(err error) error {
+	if _, ok := err.(syscall.Errno); ok {
+		return &RegisterHotkeyError{Err: err, Occupied: IsHotkeyOccupiedError(err)}
+	}
+	return fmt.Errorf("新热键注册失败: %v", err)
 }
 
 func (m *Manager) Start(modifiers, vk uint32) error {
@@ -169,12 +215,13 @@ func (m *Manager) Start(modifiers, vk uint32) error {
 					oldVK := m.currentVK
 					m.mu.Unlock()
 					restoreErr := registerHotkey(oldMod, oldVK)
+					wrappedRebindErr := rebindRegistrationError(rebindErr)
 					if restoreErr != nil {
 						registered = false
-						m.rebindResult <- fmt.Errorf("新热键注册失败: %v；原热键恢复失败: %v", rebindErr, restoreErr)
+						m.rebindResult <- fmt.Errorf("新热键注册失败: %v；原热键恢复失败: %v", wrappedRebindErr, restoreErr)
 					} else {
 						registered = true
-						m.rebindResult <- fmt.Errorf("新热键注册失败: %v", rebindErr)
+						m.rebindResult <- wrappedRebindErr
 					}
 				} else {
 					registered = true

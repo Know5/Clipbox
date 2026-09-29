@@ -7,13 +7,12 @@
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
   "author": {
-    "name": "know5",
-    "email": "know5"
+    "name": "know5"
   },
   "info": {
     "companyName": "Know5",
     "productName": "ClipBox",
-    "productVersion": "0.2.0",
+    "productVersion": "0.2.1",
     "copyright": "Copyright 2026 Know5",
     "comments": "A lightweight Windows clipboard manager."
   }

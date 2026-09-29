@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 	"syscall"
@@ -30,6 +31,8 @@ var (
 	procGetCursorPos      = user32.NewProc("GetCursorPos")
 	procGetCurrentThread  = kernel32.NewProc("GetCurrentThreadId")
 	procShellNotifyIcon   = shell32.NewProc("Shell_NotifyIconW")
+	procExtractIconEx     = shell32.NewProc("ExtractIconExW")
+	procDestroyIcon       = user32.NewProc("DestroyIcon")
 )
 
 const (
@@ -346,9 +349,47 @@ func (c *Controller) iconData(flags uint32) notifyIconData {
 	return data
 }
 
+// defaultIcon returns the tray icon. It first tries to extract the icon that
+// wails build embedded into this executable (branded ClipBox icon), and falls
+// back to the generic Windows application icon if extraction fails.
 func defaultIcon() uintptr {
+	if icon := exeIcon(); icon != 0 {
+		return icon
+	}
 	icon, _, _ := procLoadIcon.Call(0, uintptr(idiApplication))
 	return icon
+}
+
+// exeIcon extracts the first small icon embedded in the current executable.
+func exeIcon() uintptr {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0
+	}
+	exePtr, err := syscall.UTF16PtrFromString(exe)
+	if err != nil {
+		return 0
+	}
+	var largeIcon, smallIcon uintptr
+	// ExtractIconExW(path, 0, &large, &small, 1) — index 0 = first icon group.
+	ret, _, _ := procExtractIconEx.Call(
+		uintptr(unsafe.Pointer(exePtr)),
+		0,
+		uintptr(unsafe.Pointer(&largeIcon)),
+		uintptr(unsafe.Pointer(&smallIcon)),
+		1,
+	)
+	if ret == 0 {
+		return 0
+	}
+	// Prefer the small icon for the tray; fall back to the large one.
+	if smallIcon != 0 {
+		if largeIcon != 0 {
+			procDestroyIcon.Call(largeIcon)
+		}
+		return smallIcon
+	}
+	return largeIcon
 }
 
 func trayTip(state State) string {

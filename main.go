@@ -2,10 +2,11 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"os"
 	"path/filepath"
-	"fmt"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"clipbox/internal/clipboard"
@@ -38,9 +39,13 @@ func main() {
 		}
 	}()
 
-	home, _ := os.UserHomeDir()
-	dataDir := filepath.Join(home, ".clipbox")
-	os.MkdirAll(dataDir, 0755)
+	dataDir, dataErr := resolveDataDir()
+	if dataErr != nil {
+		// No writable location resolved — the app cannot store history.
+		// Surface it rather than silently scattering data into the CWD.
+		showFatalStartupError(dataErr)
+		return
+	}
 
 	// Images are stored as raw DIB files on disk, NOT as base64 in SQLite.
 	// A single screenshot can be 8+ MB; base64 inflates that another 33 %.
@@ -56,6 +61,12 @@ func main() {
 	// Downsides: none for a clipboard tool (no sensitive browsing data).
 	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
 		"--renderer-process-limit=1") // one renderer is enough for a 400×560 window
+
+	// WebView2 is required to render the UI. Detect it before wails.Run so we
+	// can point the user at the installer instead of showing a blank window.
+	if !ensureWebView2() {
+		return
+	}
 
 	startHidden := hasArg("--hidden")
 	app := NewApp(dataDir, startHidden)
@@ -107,4 +118,31 @@ func hasArg(name string) bool {
 		}
 	}
 	return false
+}
+
+// resolveDataDir picks a writable per-user directory for ClipBox data.
+// It never returns a relative path: if %USERPROFILE% is unset (so that
+// os.UserHomeDir fails or is empty) it falls back to the OS config dir and
+// finally to the executable's own folder, so a stranger's data can never
+// scatter into System32 or an arbitrary working directory.
+func resolveDataDir() (string, error) {
+	base := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		base = strings.TrimSpace(home)
+	}
+	if !filepath.IsAbs(base) {
+		if cfg, err := os.UserConfigDir(); err == nil && filepath.IsAbs(cfg) {
+			base = cfg
+		} else if exe, err := os.Executable(); err == nil {
+			base = filepath.Dir(exe)
+		}
+	}
+	if !filepath.IsAbs(base) {
+		return "", fmt.Errorf("无法确定可写的数据目录：请确认当前用户目录可访问")
+	}
+	dataDir := filepath.Join(base, ".clipbox")
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", fmt.Errorf("无法创建数据目录 %s：%w", dataDir, err)
+	}
+	return dataDir, nil
 }

@@ -16,6 +16,11 @@ import (
 
 const autoBackupSettingLastAt = "auto_backup_last_at"
 
+// autoBackupCheckInterval is how often the resident scheduler re-checks whether
+// a backup is due. The due condition itself is still gated by the user's
+// configured interval-in-days, so this only bounds scheduling latency.
+const autoBackupCheckInterval = time.Hour
+
 func (a *App) SelectAutoBackupDir() (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("app is not ready")
@@ -42,6 +47,23 @@ func (a *App) RunAutoBackupNow() (storage.BackupStats, error) {
 	}
 	a.logInfof("manual auto backup path=%s clips=%d images=%d settings=%d skippedImages=%d", stats.Path, stats.Clips, stats.Images, stats.Settings, stats.SkippedImages)
 	return stats, nil
+}
+
+// runAutoBackupScheduler runs the catch-up check at startup, then re-evaluates
+// on a ticker. A resident tray app can stay open for days; without a ticker the
+// due-check only ever ran once at launch, so scheduled backups never fired.
+func (a *App) runAutoBackupScheduler() {
+	a.maybeRunAutoBackup() // catch-up: fire immediately if already due
+	ticker := time.NewTicker(autoBackupCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-a.stopCh:
+			return
+		case <-ticker.C:
+			a.maybeRunAutoBackup()
+		}
+	}
 }
 
 func (a *App) maybeRunAutoBackup() {

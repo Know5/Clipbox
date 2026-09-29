@@ -351,6 +351,8 @@ const ClipItem = memo(function ClipItem({
   return (
     <div
       data-clip-id={clip.id}
+      role="option"
+      aria-selected={selected}
       className={`clip-item ${clip.pinned ? "pinned" : ""} ${selected ? "selected" : ""} ${copyStatus ? (copyStatus.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
       onMouseEnter={() => onHover(clip.id)}
       onClick={handleClick}
@@ -587,11 +589,15 @@ function App() {
       const activeSearch = searchValueRef.current.trim();
       loadClipPage(0, false, activeSearch, filterValueRef.current, selectedTagRef.current);
     });
-    const unsub4 = EventsOn("settings:open", () => {
+    const unsub4 = EventsOn("clip:skipped", (payload?: { message?: string }) => {
+      const message = typeof payload?.message === "string" ? payload.message : "";
+      if (message) showClearFeedback(message);
+    });
+    const unsub5 = EventsOn("settings:open", () => {
       setShowSettings(true);
     });
-    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
-  }, [loadClipPage]);
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
+  }, [loadClipPage, showClearFeedback]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -922,17 +928,26 @@ function App() {
   return (
     <div className="app">
       <div className="title-bar">
-        <div className="traffic-lights">
-          <button className="traffic-light close" onClick={() => HideWindow()} title="关闭" />
-          <button className="traffic-light minimize" onClick={() => WindowMinimise()} title="最小化" />
-        </div>
         <span className="title-text">ClipBox</span>
-        <button className="settings-btn" onClick={() => setShowSettings(true)} title="设置">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-            <circle cx="12" cy="12" r="3"/>
-          </svg>
-        </button>
+        <div className="title-actions">
+          <button className="title-btn" onClick={() => WindowMinimise()} title="最小化" aria-label="最小化">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <line x1="2" y1="6" x2="10" y2="6" />
+            </svg>
+          </button>
+          <button className="title-btn close" onClick={() => HideWindow()} title="关闭" aria-label="关闭">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
+              <line x1="3" y1="3" x2="9" y2="9" />
+              <line x1="9" y1="3" x2="3" y2="9" />
+            </svg>
+          </button>
+          <button className="settings-btn" onClick={() => setShowSettings(true)} title="设置">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       {showSettings ? (
@@ -992,8 +1007,8 @@ function App() {
         </div>
       )}
 
-      <div className="clip-list">
-        {listError && <div className="list-error">{listError}</div>}
+      <div className="clip-list" role="listbox" aria-label="剪贴板历史列表">
+        {listError && <div className="list-error" role="alert">{listError}</div>}
         {listLoading && clips.length === 0 && (
           <div className="empty">
             <span>加载中...</span>

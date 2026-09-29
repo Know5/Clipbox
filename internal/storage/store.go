@@ -784,18 +784,24 @@ func scanClipRows(rows *sql.Rows) ([]clipboard.ClipEntry, error) {
 }
 
 func searchWhere(query, clipType string) (string, []interface{}) {
-	pattern := "%" + query + "%"
+	pattern := likePattern(query)
+	const escapeClause = ` ESCAPE '\'`
 	switch normalizeClipType(clipType) {
 	case "text":
-		return `WHERE type = 'text' AND (content LIKE ? OR source_app LIKE ? OR source_title LIKE ? OR note LIKE ? OR tags LIKE ?)`,
+		return `WHERE type = 'text' AND (content LIKE ?` + escapeClause + ` OR source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
 			[]interface{}{pattern, pattern, pattern, pattern, pattern}
 	case "image":
-		return `WHERE type = 'image' AND (source_app LIKE ? OR source_title LIKE ? OR note LIKE ? OR tags LIKE ?)`,
+		return `WHERE type = 'image' AND (source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
 			[]interface{}{pattern, pattern, pattern, pattern}
 	default:
-		return `WHERE ((type = 'text' AND content LIKE ?) OR source_app LIKE ? OR source_title LIKE ? OR note LIKE ? OR tags LIKE ?)`,
+		return `WHERE ((type = 'text' AND content LIKE ?` + escapeClause + `) OR source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
 			[]interface{}{pattern, pattern, pattern, pattern, pattern}
 	}
+}
+
+func likePattern(query string) string {
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(query)
+	return "%" + escaped + "%"
 }
 
 func typeWhere(clipType string) (string, []interface{}) {

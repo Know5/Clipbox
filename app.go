@@ -33,6 +33,8 @@ type App struct {
 	settingsCache  *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
 	foregroundInfo func() windowutil.ForegroundInfo
 	windowInfo     func(hwnd uintptr) windowutil.ForegroundInfo
+	stopCh         chan struct{} // closed on shutdown to stop background loops (auto-backup ticker)
+	stopOnce       sync.Once
 }
 
 func NewApp(dataDir string, startHidden bool) *App {
@@ -42,6 +44,7 @@ func NewApp(dataDir string, startHidden bool) *App {
 		startHidden:    startHidden,
 		foregroundInfo: windowutil.CurrentForegroundInfo,
 		windowInfo:     windowutil.WindowInfo,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -87,7 +90,26 @@ func (a *App) startup(ctx context.Context) {
 		// 不再广播 clips:changed，避免把已翻页的列表重置回第一页。
 		runtime.EventsEmit(ctx, "clip:new", entry)
 	})
-
+	a.watcher.SetSkipCallback(func(reason clipboard.SkipReason) {
+		switch reason {
+		case clipboard.SkipReasonOversizedText:
+			a.logErrorf("skipped oversized clipboard text")
+			runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+				"reason":  string(reason),
+				"message": "文本过大，已跳过记录（超过 10MB）",
+			})
+		case clipboard.SkipReasonOversizedImage:
+			a.logErrorf("skipped oversized clipboard image")
+			runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+				"reason":  string(reason),
+				"message": "图片过大，已跳过记录（超过 50MB）",
+			})
+		case clipboard.SkipReasonBusyClipboard:
+			a.logErrorf("skipped clipboard update: clipboard busy")
+		case clipboard.SkipReasonReadFailed, clipboard.SkipReasonUnsupportedType:
+			a.logErrorf("skipped clipboard update: %s", string(reason))
+		}
+	})
 	if err := a.watcher.Start(); err != nil {
 		runtime.LogErrorf(ctx, "Failed to start clipboard watcher: %v", err)
 		a.logErrorf("failed to start clipboard watcher: %v", err)
@@ -129,26 +151,39 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 
+	// 开机自启自愈：注册表按 DB 意图对齐到当前 exe 路径（含 --hidden 参数）。
+	// 意图为关时也需要清理残留或指向旧路径的 Run 值。
+	if err := reconcileStartAtLogin(a.loadStartAtLoginIntent()); err != nil {
+		a.logErrorf("failed to reconcile start-at-login on startup: %v", err)
+	}
+
 	a.mu.Lock()
 	a.windowVisible = !a.startHidden
 	a.mu.Unlock()
 	a.startTray()
 	go func() {
 		defer a.recoverGoroutine("autoBackup")
-		a.maybeRunAutoBackup()
+		a.runAutoBackupScheduler()
 	}()
 
 	// Pre-warm WebView2 compositor so the first hotkey press feels instant.
 	// The first WindowShow after process start triggers an expensive first
 	// paint (~100-150ms). Absorb that cost here instead.
+	//
+	// When starting hidden (login auto-start), show the window far off-screen
+	// first so the mandatory paint never flashes on the user's display, then
+	// hide it and restore a sane on-screen position for the next real show.
 	if a.startHidden {
+		runtime.WindowSetPosition(a.ctx, -32000, -32000)
 		runtime.WindowShow(a.ctx)
 		runtime.WindowHide(a.ctx)
+		runtime.WindowSetPosition(a.ctx, 100, 100)
 	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
 	a.logInfof("shutdown")
+	a.stopOnce.Do(func() { close(a.stopCh) })
 	if a.trayController != nil {
 		a.trayController.Stop()
 	}

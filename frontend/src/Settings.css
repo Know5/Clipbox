@@ -28,7 +28,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .back-btn:hover {
@@ -366,7 +366,7 @@
   position: relative;
   cursor: pointer;
   flex-shrink: 0;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
 }
 
 .toggle-input::after {
@@ -385,7 +385,6 @@
 .toggle-input:checked {
   background: var(--accent);
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 .toggle-input:checked::after {
@@ -502,7 +501,7 @@
 .record-box.recording {
   border-color: var(--accent);
   border-style: solid;
-  background: rgba(88, 166, 255, 0.05);
+  background: var(--accent-soft);
   animation: pulseGlow 2s ease-in-out infinite;
 }
 
@@ -511,7 +510,7 @@
     box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: 0 0 0 4px var(--accent-glow), 0 0 20px rgba(88, 166, 255, 0.1);
+    box-shadow: 0 0 0 4px var(--accent-glow), 0 0 20px var(--accent-glow);
   }
 }
 
@@ -545,8 +544,8 @@
 }
 
 .recorded-keys .key-badge {
-  background: rgba(88, 166, 255, 0.15);
-  border-color: rgba(88, 166, 255, 0.3);
+  background: var(--selected-bg-hover);
+  border-color: var(--selected-border);
   color: var(--accent);
   font-weight: 600;
 }
@@ -585,7 +584,7 @@
   font-weight: 500;
   font-family: var(--font-sans);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
   letter-spacing: 0.01em;
 }
 
@@ -596,7 +595,7 @@
 }
 
 .btn:active {
-  transform: scale(0.96);
+  background: var(--bg-active);
 }
 
 .btn:disabled {
@@ -613,8 +612,7 @@
 }
 
 .btn.primary:hover {
-  filter: brightness(1.1);
-  box-shadow: 0 0 0 2px var(--accent-glow);
+  filter: brightness(1.08);
 }
 
 .btn.primary:disabled {
@@ -700,4 +698,16 @@
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* 尊重系统"减少动态效果"偏好：关闭脉冲/过渡动画，保留静态状态提示。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

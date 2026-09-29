@@ -740,6 +740,9 @@ func (a *App) UpdateHotkey(modifiers, keyCode int) error {
 	err := a.hotkeyManager.Rebind(uint32(modifiers), uint32(keyCode))
 	if err != nil {
 		a.logErrorf("update hotkey failed modifiers=%d key=%d: %v", modifiers, keyCode, err)
+		if hotkey.IsHotkeyOccupiedError(err) {
+			return fmt.Errorf("%v\n当前热键保持不变，请换一个组合键后重试", err)
+		}
 		return err
 	}
 
