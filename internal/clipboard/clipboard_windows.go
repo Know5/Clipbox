@@ -81,7 +81,23 @@ var imageDir string
 // so the watcher should ignore the next update(s).
 var selfWrite int32
 
+// SkipReason 解释为什么一次剪贴板更新没有产生可记录条目。
+type SkipReason string
+
+const (
+	SkipReasonBusyClipboard   SkipReason = "clipboard busy"
+	SkipReasonPrivateContent  SkipReason = "private content"
+	SkipReasonOversizedText   SkipReason = "oversized text"
+	SkipReasonOversizedImage  SkipReason = "oversized image"
+	SkipReasonUnsupportedType SkipReason = "unsupported type"
+	SkipReasonReadFailed      SkipReason = "read failed"
+)
+
+// OnClipSkipFunc 在跳过一次剪贴板更新时被调用，便于上层给用户可见反馈。
+type OnClipSkipFunc func(reason SkipReason)
+
 // SetImageDir configures where DIB image files will be stored.
+
 func SetImageDir(dir string) {
 	imageDir = dir
 }
@@ -186,6 +202,7 @@ func readClipboardDword(format uintptr) (uint32, bool) {
 type Watcher struct {
 	hwnd      uintptr
 	callback  OnClipChangeFunc
+	onSkip    OnClipSkipFunc
 	stopCh    chan struct{}
 	stopOnce  sync.Once
 	startOnce sync.Once
@@ -196,6 +213,21 @@ func NewWatcher(callback OnClipChangeFunc) *Watcher {
 		callback: callback,
 		stopCh:   make(chan struct{}),
 	}
+}
+
+// SetSkipCallback 注册跳过原因回调。nil 表示不报告跳过。
+func (w *Watcher) SetSkipCallback(callback OnClipSkipFunc) {
+	if w == nil {
+		return
+	}
+	w.onSkip = callback
+}
+
+func (w *Watcher) reportSkip(reason SkipReason) {
+	if w == nil || w.onSkip == nil {
+		return
+	}
+	w.onSkip(reason)
 }
 
 type wndClassEx struct {
@@ -256,9 +288,11 @@ func clipboardWndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr
 			return 0
 		}
 		if globalWatcher != nil && globalWatcher.callback != nil {
-			entry := readClipboard()
+			entry, reason := readClipboard()
 			if entry != nil {
 				globalWatcher.callback(*entry)
+			} else if reason != "" {
+				globalWatcher.reportSkip(reason)
 			}
 		}
 		return 0
@@ -342,17 +376,16 @@ func (w *Watcher) messageLoop(initCh chan<- error) {
 		}
 	}
 }
-
-func readClipboard() *ClipEntry {
+func readClipboard() (*ClipEntry, SkipReason) {
 	ret, _, _ := procOpenClipboard.Call(0)
 	if ret == 0 {
-		return nil
+		return nil, SkipReasonBusyClipboard
 	}
 	defer procCloseClipboard.Call()
 
 	// 尊重来源应用的隐私标记（密码管理器等），跳过记录。
 	if clipboardMarkedPrivate() {
-		return nil
+		return nil, SkipReasonPrivateContent
 	}
 
 	if ret, _, _ := procIsClipboardFormatAvailable.Call(CF_DIB); ret != 0 {
@@ -363,24 +396,26 @@ func readClipboard() *ClipEntry {
 		return readTextFromClipboard()
 	}
 
-	return nil
+	return nil, SkipReasonUnsupportedType
 }
-
-func readTextFromClipboard() *ClipEntry {
+func readTextFromClipboard() (*ClipEntry, SkipReason) {
 	h, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
 	if h == 0 {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 
 	// Get the actual size of the global memory block.
 	sz, _, _ := procGlobalSize.Call(h)
-	if sz == 0 || sz > 10*1024*1024 { // sanity: refuse >10 MB of text
-		return nil
+	if sz == 0 {
+		return nil, SkipReasonReadFailed
+	}
+	if sz > 10*1024*1024 { // sanity: refuse >10 MB of text
+		return nil, SkipReasonOversizedText
 	}
 
 	ptr, _, _ := procGlobalLock.Call(h)
 	if ptr == 0 {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 	defer procGlobalUnlock.Call(h)
 
@@ -388,12 +423,12 @@ func readTextFromClipboard() *ClipEntry {
 	// creating a huge array type in the compiled binary.
 	count := int(sz / 2)
 	if count < 1 {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 	utf16Slice := uint16SliceFromPointer(ptr, count)
 	text := syscall.UTF16ToString(utf16Slice)
 	if text == "" {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 
 	preview := truncateRunes(text, 200)
@@ -403,23 +438,26 @@ func readTextFromClipboard() *ClipEntry {
 		Content:   text,
 		Preview:   preview,
 		Timestamp: time.Now().UnixMilli(),
-	}
+	}, ""
 }
 
-func readImageFromClipboard() *ClipEntry {
+func readImageFromClipboard() (*ClipEntry, SkipReason) {
 	h, _, _ := procGetClipboardData.Call(CF_DIB)
 	if h == 0 {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 
 	size, _, _ := procGlobalSize.Call(h)
-	if size == 0 || size > 50*1024*1024 { // sanity: refuse >50 MB images
-		return nil
+	if size == 0 {
+		return nil, SkipReasonReadFailed
+	}
+	if size > 50*1024*1024 { // sanity: refuse >50 MB images
+		return nil, SkipReasonOversizedImage
 	}
 
 	ptr, _, _ := procGlobalLock.Call(h)
 	if ptr == 0 {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 	defer procGlobalUnlock.Call(h)
 
@@ -439,7 +477,7 @@ func readImageFromClipboard() *ClipEntry {
 		}
 	}
 	if filePath == "" {
-		return nil
+		return nil, SkipReasonReadFailed
 	}
 
 	thumbnail, _ := DibToThumbnailDataURL(dibData, 160)
@@ -451,7 +489,7 @@ func readImageFromClipboard() *ClipEntry {
 		Preview:   preview,
 		Thumbnail: thumbnail,
 		Timestamp: time.Now().UnixMilli(),
-	}
+	}, ""
 }
 
 var fileNameCounter int64

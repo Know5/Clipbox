@@ -40,6 +40,25 @@ ClipBox 是一款面向 Windows 的轻量级剪贴板增强工具。它会自动
 
 如需支持 macOS 或 Linux，需要替换 `internal/clipboard`、`internal/hotkey`、`internal/windowutil` 等平台相关实现。
 
+## 首次运行须知
+
+**WebView2 运行时（必需）**
+
+ClipBox 的界面依赖 Microsoft Edge WebView2 运行时渲染。Windows 11 和多数 Windows 10 已内置该组件；若缺失，ClipBox 启动时会检测并提示，可点击提示打开微软官方下载页安装「Evergreen Bootstrapper」后重新启动。也可手动下载：
+
+```text
+https://go.microsoft.com/fwlink/p/?LinkId=2124703
+```
+
+**SmartScreen 提示**
+
+便携版 `clipbox.exe` 未做代码签名，首次运行时 Windows SmartScreen 可能提示「已保护你的电脑」。这是未签名应用的正常提示，可这样放行：
+
+- 在提示框点击「更多信息」→「仍要运行」。
+- 或右键 `clipbox.exe` →「属性」，勾选底部的「解除锁定」后确定。
+
+可用 `dist\release\checksums.sha256` 中的哈希值校验下载的 ZIP 包完整性。
+
 ## 技术栈
 
 - Desktop: Wails v2.12.0
@@ -237,4 +256,4 @@ wails build
 
 ## License
 
-如需开源发布，请在仓库中补充明确的 License 文件。
+本项目基于 [MIT License](LICENSE) 发布，可自由使用、修改和分发，详见仓库根目录的 `LICENSE` 文件。

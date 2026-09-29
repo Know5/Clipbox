@@ -208,6 +208,38 @@ func TestPrepareClipEntrySkipsSourceInfoWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestUpdateAppSettingsFailureKeepsPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	store, err := storage.NewStore(dir)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	defer store.Close()
+
+	app := NewApp(dir, false)
+	app.store = store
+
+	original := app.loadAppSettings()
+	next := original
+	next.Theme = "light"
+	next.MinTextLength = 5
+
+	// 关闭数据库后保存必然失败：不能广播未持久化的值，也不更新内存缓存。
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	returned, err := app.UpdateAppSettings(next)
+	if err == nil {
+		t.Fatal("UpdateAppSettings() error = nil, want persistence failure")
+	}
+	if returned.Theme == next.Theme || returned.MinTextLength == next.MinTextLength {
+		t.Fatalf("UpdateAppSettings() returned %+v, want persisted values instead of unsaved input", returned)
+	}
+	if cached := app.loadAppSettings(); cached.Theme == next.Theme || cached.MinTextLength == next.MinTextLength {
+		t.Fatalf("settings cache = %+v, want persisted values after failure", cached)
+	}
+}
+
 func TestSetCapturePausedPersistsSetting(t *testing.T) {
 	dir := t.TempDir()
 	store, err := storage.NewStore(dir)

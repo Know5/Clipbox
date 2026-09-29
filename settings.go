@@ -122,7 +122,11 @@ func (a *App) GetAppSettings() AppSettings {
 func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
 	prev := a.loadAppSettings()
 	settings = normalizeAppSettings(settings)
-	saveErr := a.saveAppSettings(settings)
+	if err := a.saveAppSettings(settings); err != nil {
+		// 保存失败时不广播未持久化的状态，返回 DB 真值让前端与后端保持一致。
+		a.invalidateSettingsCache()
+		return a.loadAppSettings(), err
+	}
 
 	// 先广播设置变更，让主题等 UI 状态立即生效，再做可能耗时的清理。
 	if a.ctx != nil {
@@ -143,7 +147,7 @@ func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
 			runtime.EventsEmit(a.ctx, "clips:changed")
 		}
 	}
-	return settings, saveErr
+	return settings, nil
 }
 
 func (a *App) loadAppSettings() AppSettings {
@@ -163,7 +167,7 @@ func (a *App) loadAppSettings() AppSettings {
 	settings.RecordImages = a.getBoolSetting("record_images", settings.RecordImages)
 	settings.SkipSensitiveText = a.getBoolSetting("skip_sensitive_text", settings.SkipSensitiveText)
 	settings.RecordSourceInfo = a.getBoolSetting("record_source_info", settings.RecordSourceInfo)
-	settings.StartAtLogin = getStartAtLogin()
+	settings.StartAtLogin = a.loadStartAtLoginIntent()
 	settings.AutoPaste = a.getBoolSetting("auto_paste", settings.AutoPaste)
 	settings.Theme = a.getStringSetting("theme")
 	settings.MinTextLength = a.getIntSetting("min_text_length", settings.MinTextLength)
@@ -195,6 +199,7 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		"record_images":             strconv.FormatBool(settings.RecordImages),
 		"skip_sensitive_text":       strconv.FormatBool(settings.SkipSensitiveText),
 		"record_source_info":        strconv.FormatBool(settings.RecordSourceInfo),
+		"start_at_login":            strconv.FormatBool(settings.StartAtLogin),
 		"auto_paste":                strconv.FormatBool(settings.AutoPaste),
 		"theme":                     settings.Theme,
 		"min_text_length":           strconv.Itoa(settings.MinTextLength),
@@ -209,22 +214,43 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		"excluded_apps":             strings.Join(settings.ExcludedApps, "\n"),
 		"excluded_window_titles":    strings.Join(settings.ExcludedWindowTitles, "\n"),
 	}
-	// 单事务批量写入，替代 17 次独立 Exec。
+
+	// 开机自启：先对齐注册表，再落盘 DB 意图。注册表失败时其它设置不再写入，
+	// 缓存也不更新，避免 DB 显示开启而注册表实际没有写入。
+	prevIntent := a.loadStartAtLoginIntent()
+	if err := reconcileStartAtLogin(settings.StartAtLogin); err != nil {
+		a.invalidateSettingsCache()
+		return fmt.Errorf("开机自启更新失败: %w", err)
+	}
 	if err := a.store.SetSettings(values); err != nil {
+		// DB 写入失败时把注册表回滚到此前意图，保持两者一致。
+		if rollbackErr := reconcileStartAtLogin(prevIntent); rollbackErr != nil {
+			a.logErrorf("failed to roll back start-at-login after settings save failure: %v", rollbackErr)
+			a.invalidateSettingsCache()
+			return fmt.Errorf("设置保存失败，且开机自启回滚失败，请重开设置页确认自启开关状态: %w", err)
+		}
+		a.invalidateSettingsCache()
 		return err
 	}
 	a.settingsMu.Lock()
 	cached := settings
 	a.settingsCache = &cached
 	a.settingsMu.Unlock()
+	return nil
+}
 
-	// 注册表操作相对慢，只有开机自启状态变化时才写。
-	if getStartAtLogin() != settings.StartAtLogin {
-		if err := setStartAtLogin(settings.StartAtLogin); err != nil {
-			return fmt.Errorf("其他设置已保存，但开机自启更新失败: %w", err)
+// loadStartAtLoginIntent 以 DB 记录的意图为准；DB 未记录过时（老用户或全新安装）
+// 回退到读注册表，作为一次性迁移，之后写回 DB。
+func (a *App) loadStartAtLoginIntent() bool {
+	raw, err := a.store.GetSetting("start_at_login")
+	if err == nil && raw != "" {
+		if parsed, perr := strconv.ParseBool(raw); perr == nil {
+			return parsed
 		}
 	}
-	return nil
+	inferred := registryHasStartupEntry()
+	_ = a.store.SetSetting("start_at_login", strconv.FormatBool(inferred))
+	return inferred
 }
 
 func (a *App) getBoolSetting(key string, fallback bool) bool {

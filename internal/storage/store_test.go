@@ -497,6 +497,99 @@ func TestSearchSupportsPaginationAndCount(t *testing.T) {
 	}
 }
 
+func TestSearchUsesLiteralWildcardsAndConsistentCounts(t *testing.T) {
+	store := newTestStore(t)
+	clips := []clipboard.ClipEntry{
+		{Type: "text", Content: "50% done", Preview: "50% done", Timestamp: 1000, Tags: "percent"},
+		{Type: "text", Content: "100 percent", Preview: "100 percent", Timestamp: 2000, Tags: "ordinary"},
+		{Type: "text", Content: "under_score", Preview: "under_score", Timestamp: 3000, Tags: "underscore"},
+		{Type: "text", Content: "under score", Preview: "under score", Timestamp: 4000, Tags: "ordinary"},
+	}
+	for _, clip := range clips {
+		if _, err := store.SaveOrUpdate(clip); err != nil {
+			t.Fatalf("SaveOrUpdate(%q): %v", clip.Content, err)
+		}
+	}
+
+	for _, tc := range []struct {
+		query string
+		want  string
+	}{
+		{query: "%", want: "50% done"},
+		{query: "_", want: "under_score"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			items, err := store.SearchByType(tc.query, "all", 10, 0)
+			if err != nil {
+				t.Fatalf("SearchByType(%q): %v", tc.query, err)
+			}
+			if len(items) != 1 || items[0].Content != tc.want {
+				t.Fatalf("SearchByType(%q) = %+v, want only %q", tc.query, items, tc.want)
+			}
+
+			count, err := store.CountSearchByType(tc.query, "all")
+			if err != nil {
+				t.Fatalf("CountSearchByType(%q): %v", tc.query, err)
+			}
+			if count != len(items) {
+				t.Fatalf("CountSearchByType(%q) = %d, page length = %d", tc.query, count, len(items))
+			}
+
+			tags, err := store.ListTags(tc.query, "all")
+			if err != nil {
+				t.Fatalf("ListTags(%q): %v", tc.query, err)
+			}
+			if len(tags) != 1 {
+				t.Fatalf("ListTags(%q) = %+v, want only tags on literal matches", tc.query, tags)
+			}
+			wantTag := "percent"
+			if tc.query == "_" {
+				wantTag = "underscore"
+			}
+			if tags[0].Name != wantTag || tags[0].Count != 1 {
+				t.Fatalf("ListTags(%q) = %+v, want %s count 1", tc.query, tags, wantTag)
+			}
+		})
+	}
+}
+
+func TestChineseSubstringSearchAndCounts(t *testing.T) {
+	store := newTestStore(t)
+	for i, content := range []string{"微信聊天记录", "微信支付凭证", "周会记录"} {
+		if _, err := store.SaveOrUpdate(clipboard.ClipEntry{
+			Type:      "text",
+			Content:   content,
+			Preview:   content,
+			Timestamp: int64(1000 + i),
+		}); err != nil {
+			t.Fatalf("SaveOrUpdate(%q): %v", content, err)
+		}
+	}
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{query: "微", want: 2},
+		{query: "微信", want: 2},
+		{query: "微信聊", want: 1},
+	} {
+		items, err := store.SearchByType(tc.query, "all", 1, 0)
+		if err != nil {
+			t.Fatalf("SearchByType(%q): %v", tc.query, err)
+		}
+		count, err := store.CountSearchByType(tc.query, "all")
+		if err != nil {
+			t.Fatalf("CountSearchByType(%q): %v", tc.query, err)
+		}
+		if len(items) != 1 || count != tc.want {
+			t.Fatalf("query %q: page length=%d count=%d, want page length 1 count %d", tc.query, len(items), count, tc.want)
+		}
+		if count2, err := store.CountSearchByTypeAndTag(tc.query, "all", ""); err != nil || count2 != count {
+			t.Fatalf("CountSearchByTypeAndTag(%q, empty tag) = %d, %v; want %d", tc.query, count2, err, count)
+		}
+	}
+}
+
 func TestSearchIndexRebuildsAndTracksClipChanges(t *testing.T) {
 	store := newTestStore(t)
 	if !store.ftsAvailable {

@@ -144,6 +144,10 @@ New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
 Copy-Item -LiteralPath $exePath -Destination (Join-Path $releaseDir "ClipBox.exe")
 Copy-Item -LiteralPath (Join-Path $RepoRoot "README.md") -Destination (Join-Path $releaseDir "README.md")
+$licenseSource = Join-Path $RepoRoot "LICENSE"
+if (Test-Path -LiteralPath $licenseSource) {
+    Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $releaseDir "LICENSE")
+}
 
 $installerPath = Join-Path $BuildBinDir "clipbox-amd64-installer.exe"
 if ($IncludeInstaller) {
@@ -157,6 +161,10 @@ if ($IncludeInstaller) {
 $files = @()
 $files += New-FileEntry (Join-Path $releaseDir "ClipBox.exe") $releaseDir
 $files += New-FileEntry (Join-Path $releaseDir "README.md") $releaseDir
+$licenseCopy = Join-Path $releaseDir "LICENSE"
+if (Test-Path -LiteralPath $licenseCopy) {
+    $files += New-FileEntry $licenseCopy $releaseDir
+}
 $installerCopy = Join-Path $releaseDir "ClipBox-$version-windows-amd64-installer.exe"
 if (Test-Path -LiteralPath $installerCopy) {
     $files += New-FileEntry $installerCopy $releaseDir

@@ -1,35 +1,35 @@
-/* ClipBox — macOS-quality design system */
+/* ClipBox — Windows-native compact utility theme */
 :root {
-  /* macOS-inspired color palette */
-  --bg-primary: rgb(30, 30, 32);
-  --bg-elevated: rgb(50, 50, 52);
-  --bg-input: rgba(255, 255, 255, 0.06);
-  --bg-hover: rgba(255, 255, 255, 0.05);
-  --bg-active: rgba(255, 255, 255, 0.08);
-  --border: rgba(255, 255, 255, 0.08);
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-focus: rgba(88, 166, 255, 0.5);
+  /* Windows 11-inspired neutral surfaces */
+  --bg-primary: rgb(32, 32, 32);
+  --bg-elevated: rgb(43, 43, 43);
+  --bg-input: rgb(43, 43, 43);
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --bg-active: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-focus: rgba(76, 166, 255, 0.7);
   --text-primary: rgba(255, 255, 255, 0.95);
-  --text-secondary: rgba(255, 255, 255, 0.60);
-  --text-tertiary: rgba(255, 255, 255, 0.35);
-  --accent: #58a6ff;
-  --accent-soft: rgba(88, 166, 255, 0.15);
-  --accent-glow: rgba(88, 166, 255, 0.25);
-  --danger: #ff6b6b;
-  --danger-soft: rgba(255, 107, 107, 0.12);
-  --success: #63e6be;
-  --purple: #c084fc;
-  --purple-soft: rgba(192, 132, 252, 0.15);
-  --radius-xl: 16px;
-  --radius-lg: 12px;
-  --radius-md: 8px;
-  --radius-sm: 6px;
-  --shadow-window: 0 24px 80px rgba(0, 0, 0, 0.55), 0 0 1px rgba(255, 255, 255, 0.1);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.3);
-  --font-sans: "ClipBox Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
-  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  --text-secondary: rgba(255, 255, 255, 0.72);
+  --text-tertiary: rgba(255, 255, 255, 0.55);
+  --accent: #4ca6ff;
+  --accent-soft: rgba(76, 166, 255, 0.14);
+  --accent-glow: rgba(76, 166, 255, 0.22);
+  --danger: #ff7a7a;
+  --danger-soft: rgba(255, 122, 122, 0.12);
+  --success: #6ccb9a;
+  --purple: #b49bff;
+  --purple-soft: rgba(180, 155, 255, 0.14);
+  --radius-xl: 8px;
+  --radius-lg: 6px;
+  --radius-md: 6px;
+  --radius-sm: 4px;
+  --shadow-window: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.28);
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --transition-fast: 0.12s ease-out;
+  --transition-smooth: 0.18s ease-out;
   /* Themeable surfaces & details (dark defaults) */
   --window-edge: rgba(255, 255, 255, 0.06);
   --bg-faint: rgba(255, 255, 255, 0.02);
@@ -42,43 +42,79 @@
   --scrim: rgba(0, 0, 0, 0.6);
   --layer-scrim: rgba(12, 12, 14, 0.72);
   --knob: rgba(255, 255, 255, 0.86);
+  /* Interactive state surfaces — derived from --accent/--success so they
+     track the theme instead of leaking the dark-mode blue into light mode. */
+  --selected-bg: rgba(88, 166, 255, 0.12);
+  --selected-bg-hover: rgba(88, 166, 255, 0.16);
+  --selected-border: rgba(88, 166, 255, 0.34);
+  --selected-border-hover: rgba(88, 166, 255, 0.42);
+  --selected-ring: rgba(88, 166, 255, 0.1);
+  --pinned-bg-hover: rgba(88, 166, 255, 0.1);
+  --copied-bg: rgba(99, 230, 190, 0.08);
+  --copied-bg-strong: rgba(99, 230, 190, 0.11);
+  --copied-border: rgba(99, 230, 190, 0.35);
+  --copied-border-strong: rgba(99, 230, 190, 0.42);
+  --copied-ring: rgba(99, 230, 190, 0.08);
+  --danger-border: rgba(255, 107, 107, 0.35);
+  --danger-border-strong: rgba(255, 107, 107, 0.5);
+  --danger-bg-state: rgba(255, 107, 107, 0.08);
+  --danger-bg-state-strong: rgba(255, 107, 107, 0.1);
+  --inset-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  --kbd-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 0.5px 0 var(--bg-hover);
 }
 
 /* ── Light theme ── */
 :root[data-theme="light"] {
-  --bg-primary: rgb(246, 246, 248);
+  --bg-primary: rgb(249, 249, 249);
   --bg-elevated: rgb(255, 255, 255);
-  --bg-input: rgba(0, 0, 0, 0.045);
-  --bg-hover: rgba(0, 0, 0, 0.05);
-  --bg-active: rgba(0, 0, 0, 0.08);
-  --border: rgba(0, 0, 0, 0.1);
-  --border-subtle: rgba(0, 0, 0, 0.05);
-  --border-focus: rgba(9, 105, 218, 0.45);
-  --text-primary: rgba(23, 23, 28, 0.95);
-  --text-secondary: rgba(23, 23, 28, 0.62);
-  --text-tertiary: rgba(23, 23, 28, 0.4);
-  --accent: #0969da;
-  --accent-soft: rgba(9, 105, 218, 0.12);
-  --accent-glow: rgba(9, 105, 218, 0.22);
-  --danger: #d93036;
-  --danger-soft: rgba(217, 48, 54, 0.1);
-  --success: #1a7f4e;
-  --purple: #8250df;
-  --purple-soft: rgba(130, 80, 223, 0.12);
-  --shadow-window: 0 24px 80px rgba(0, 0, 0, 0.16), 0 0 1px rgba(0, 0, 0, 0.25);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.1);
-  --window-edge: rgba(255, 255, 255, 0.75);
+  --bg-input: rgb(255, 255, 255);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.07);
+  --border: rgba(0, 0, 0, 0.12);
+  --border-subtle: rgba(0, 0, 0, 0.07);
+  --border-focus: rgba(0, 95, 184, 0.65);
+  --text-primary: rgba(27, 27, 27, 0.96);
+  --text-secondary: rgba(27, 27, 27, 0.72);
+  --text-tertiary: rgba(27, 27, 27, 0.55);
+  --accent: #005fb8;
+  --accent-soft: rgba(0, 95, 184, 0.1);
+  --accent-glow: rgba(0, 95, 184, 0.18);
+  --danger: #c42b1c;
+  --danger-soft: rgba(196, 43, 28, 0.09);
+  --success: #10893e;
+  --purple: #744da9;
+  --purple-soft: rgba(116, 77, 169, 0.11);
+  --shadow-window: 0 8px 24px rgba(0, 0, 0, 0.14);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.11);
+  --window-edge: rgba(255, 255, 255, 0.6);
   --bg-faint: rgba(0, 0, 0, 0.02);
   --bg-subtle: rgba(0, 0, 0, 0.035);
-  --border-strong: rgba(0, 0, 0, 0.15);
-  --scrollbar-thumb: rgba(0, 0, 0, 0.16);
-  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.26);
-  --scrollbar-thumb-active: rgba(0, 0, 0, 0.36);
+  --border-strong: rgba(0, 0, 0, 0.17);
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.32);
+  --scrollbar-thumb-active: rgba(0, 0, 0, 0.42);
   --media-bg: rgba(0, 0, 0, 0.05);
-  --scrim: rgba(0, 0, 0, 0.5);
-  --layer-scrim: rgba(248, 248, 250, 0.78);
+  --scrim: rgba(0, 0, 0, 0.45);
+  --layer-scrim: rgba(249, 249, 249, 0.82);
   --knob: #ffffff;
+  --selected-bg: rgba(0, 95, 184, 0.1);
+  --selected-bg-hover: rgba(0, 95, 184, 0.14);
+  --selected-border: rgba(0, 95, 184, 0.42);
+  --selected-border-hover: rgba(0, 95, 184, 0.5);
+  --selected-ring: rgba(0, 95, 184, 0.12);
+  --pinned-bg-hover: rgba(0, 95, 184, 0.09);
+  --copied-bg: rgba(16, 137, 62, 0.1);
+  --copied-bg-strong: rgba(16, 137, 62, 0.14);
+  --copied-border: rgba(16, 137, 62, 0.4);
+  --copied-border-strong: rgba(16, 137, 62, 0.48);
+  --copied-ring: rgba(16, 137, 62, 0.12);
+  --danger-border: rgba(196, 43, 28, 0.4);
+  --danger-border-strong: rgba(196, 43, 28, 0.52);
+  --danger-bg-state: rgba(196, 43, 28, 0.09);
+  --danger-bg-state-strong: rgba(196, 43, 28, 0.13);
+  --inset-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06);
+  --kbd-shadow: 0 1px 0 rgba(0, 0, 0, 0.07);
 }
 
 * {
@@ -97,6 +133,26 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* 键盘可达性：为交互元素提供统一的可见焦点环。仅在键盘导航时出现
+   (:focus-visible)，鼠标点击不会显示，避免打扰。 */
+:where(button, [role="button"], input, textarea, a, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* 尊重系统「减少动态效果」偏好：关闭动画与过渡，避免眩晕。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ── Window Container ── */
 .app {
   display: flex;
@@ -105,9 +161,6 @@ body {
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow:
-    0 0 0 1px var(--window-edge) inset,
-    var(--shadow-window);
   overflow: hidden;
   position: relative;
 }
@@ -116,130 +169,78 @@ body {
 .title-bar {
   display: flex;
   align-items: center;
-  height: 38px;
-  padding: 0 12px;
+  height: 36px;
+  padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-faint);
+  background: var(--bg-primary);
   flex-shrink: 0;
   position: relative;
   --wails-draggable: drag;
   user-select: none;
 }
 
-.traffic-lights {
-  display: flex;
-  gap: 7px;
-  align-items: center;
-  z-index: 2;
-  --wails-draggable: no-drag;
-}
-
-.traffic-light {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  transition: opacity var(--transition-fast), filter var(--transition-fast);
-  position: relative;
-  --wails-draggable: no-drag;
-}
-
-.traffic-light::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-}
-
-.traffic-light.close {
-  background: #ff5f57;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.15) inset;
-}
-
-.traffic-light.close:hover {
-  filter: brightness(1.15);
-}
-
-.traffic-light.close::after {
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6' viewBox='0 0 6 6'%3E%3Cpath d='M0.5 0.5L5.5 5.5M5.5 0.5L0.5 5.5' stroke='%23820005' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") center/6px no-repeat;
-}
-
-.traffic-light.minimize {
-  background: #febc2e;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.15) inset;
-}
-
-.traffic-light.minimize:hover {
-  filter: brightness(1.1);
-}
-
-.traffic-light.minimize::after {
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='2' viewBox='0 0 6 2'%3E%3Cpath d='M0.5 1H5.5' stroke='%23995700' stroke-width='1.1' stroke-linecap='round'/%3E%3C/svg%3E") center/6px no-repeat;
-}
-
-.title-bar:hover .traffic-light::after {
-  opacity: 1;
-}
-
 .title-text {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
   font-size: 12px;
-  font-weight: 500;
-  color: var(--text-tertiary);
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0;
   pointer-events: none;
 }
 
-.settings-btn {
+.title-actions {
   margin-left: auto;
-  width: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  --wails-draggable: no-drag;
+}
+
+.title-btn,
+.settings-btn {
+  width: 30px;
   height: 28px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
   --wails-draggable: no-drag;
 }
 
+.title-btn:hover,
 .settings-btn:hover {
   background: var(--bg-hover);
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
-.settings-btn:active {
-  background: var(--bg-active);
-  transform: scale(0.94);
+.title-btn.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.settings-btn {
+  width: 28px;
 }
 
 /* ── Search Bar ── */
 .search-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px 8px;
-  margin: 6px 10px 0;
+  gap: 8px;
+  padding: 0 10px;
+  height: 32px;
+  margin: 8px 10px 0;
   background: var(--bg-input);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
   transition: border-color var(--transition-smooth), box-shadow var(--transition-smooth);
 }
 
 .search-bar:focus-within {
   border-color: var(--border-focus);
-  box-shadow:
-    inset 0 1px 3px rgba(0, 0, 0, 0.3),
-    0 0 0 2px var(--accent-glow);
 }
 
 .search-icon {
@@ -307,11 +308,10 @@ body {
 }
 
 .chip.active {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: var(--accent-soft);
+  border-color: var(--selected-border);
+  color: var(--text-primary);
   font-weight: 600;
-  box-shadow: 0 0 0 2px var(--accent-glow), 0 1px 4px rgba(88, 166, 255, 0.3);
 }
 
 .chip.danger {
@@ -398,9 +398,9 @@ body {
 }
 
 .tag-chip.active {
-  color: var(--success);
-  border-color: rgba(99, 230, 190, 0.38);
-  background: rgba(99, 230, 190, 0.14);
+  color: var(--text-primary);
+  border-color: var(--selected-border);
+  background: var(--selected-bg);
 }
 
 .tag-chip span {
@@ -521,78 +521,77 @@ body {
 
 /* ── Clip Items ── */
 .clip-item {
-  padding: 12px 14px;
+  padding: 9px 10px;
   margin: 0 0 2px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background var(--transition-fast), box-shadow var(--transition-fast), border-color var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast);
   border: 1px solid transparent;
   position: relative;
 }
 
 .clip-item:hover {
   background: var(--bg-hover);
-  box-shadow: var(--shadow-hover);
-  border-color: var(--border);
+  border-color: var(--border-subtle);
 }
 
 .clip-item.selected {
-  background: rgba(88, 166, 255, 0.12);
-  border-color: rgba(88, 166, 255, 0.34);
-  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.1);
+  background: var(--selected-bg);
+  border-color: var(--selected-border);
 }
 
 .clip-item.selected:hover {
-  background: rgba(88, 166, 255, 0.16);
-  border-color: rgba(88, 166, 255, 0.42);
+  background: var(--selected-bg-hover);
+  border-color: var(--selected-border-hover);
 }
 
 .clip-item:active {
-  box-shadow: var(--shadow-card);
+  background: var(--bg-active);
 }
 
 .clip-item.pinned {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
   border-left: 2px solid var(--accent);
-  background: var(--accent-soft);
-  padding-left: 11px;
 }
 
 .clip-item.pinned:hover {
-  background: rgba(88, 166, 255, 0.1);
-  border-color: transparent;
+  background: var(--bg-hover);
+  border-color: var(--border-subtle);
   border-left: 2px solid var(--accent);
 }
 
 .clip-item.pinned.selected {
-  border-color: rgba(88, 166, 255, 0.34);
+  background: var(--selected-bg);
+  border-color: var(--selected-border);
   border-left: 2px solid var(--accent);
 }
 
 .clip-item.copied {
-  border-color: rgba(99, 230, 190, 0.35);
-  background: rgba(99, 230, 190, 0.08);
+  border-color: var(--copied-border);
+  background: var(--copied-bg);
 }
 
 .clip-item.copied.selected {
-  border-color: rgba(99, 230, 190, 0.42);
-  background: rgba(99, 230, 190, 0.11);
-  box-shadow: 0 0 0 2px rgba(99, 230, 190, 0.08);
+  border-color: var(--copied-border-hover);
+  background: var(--copied-bg-hover);
+  box-shadow: 0 0 0 2px var(--copied-ring);
 }
 
 .clip-item.copy-error {
-  border-color: rgba(255, 107, 107, 0.35);
-  background: rgba(255, 107, 107, 0.08);
+  border-color: var(--danger-border);
+  background: var(--danger-bg-state);
 }
 
 .clip-item.delete-confirming {
-  border-color: rgba(255, 107, 107, 0.42);
-  background: rgba(255, 107, 107, 0.08);
+  border-color: var(--danger-border-strong);
+  background: var(--danger-bg-state);
 }
 
 .clip-item.delete-confirming.selected {
-  border-color: rgba(255, 107, 107, 0.5);
-  background: rgba(255, 107, 107, 0.1);
-  box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.08);
+  border-color: var(--danger-border-strong);
+  background: var(--danger-bg-state-strong);
+  box-shadow: 0 0 0 2px var(--danger-bg-state);
 }
 
 /* ── Clip Header ── */
@@ -612,12 +611,10 @@ body {
 
 .dot.text {
   background: var(--accent);
-  box-shadow: 0 0 6px var(--accent-glow);
 }
 
 .dot.image {
   background: var(--purple);
-  box-shadow: 0 0 6px var(--purple-soft);
 }
 
 .clip-time {
@@ -688,6 +685,7 @@ body {
   gap: 2px;
   opacity: 0;
   transition: opacity var(--transition-fast);
+  margin-left: auto;
 }
 
 .clip-item:hover .clip-actions,
@@ -720,7 +718,7 @@ body {
 }
 
 .act:active {
-  transform: scale(0.94);
+  background: var(--bg-active);
 }
 
 .act.on {
@@ -743,14 +741,14 @@ body {
 }
 
 .clip-text {
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.45;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   font-weight: 400;
 }
 
@@ -775,15 +773,13 @@ body {
 /* ── Detail Panel ── */
 .detail-layer {
   position: absolute;
-  inset: 38px 0 0;
+  inset: 36px 0 0;
   z-index: 20;
   display: flex;
   align-items: stretch;
   justify-content: center;
-  padding: 10px;
+  padding: 8px;
   background: var(--layer-scrim);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
 }
 
 .detail-panel {
@@ -1036,24 +1032,25 @@ body {
 }
 
 /* ── Footer ── */
+/* 允许在窄窗口(≈400px)换行，避免五组键位提示 + 固定按钮溢出被裁剪。 */
 .footer {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 9px 16px;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 8px;
+  padding: 6px 10px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--bg-faint);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: var(--bg-primary);
   flex-shrink: 0;
 }
 
 .kbd-group {
   display: flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
+  gap: 3px;
+  font-size: 10px;
   color: var(--text-tertiary);
   font-weight: 400;
   white-space: nowrap;
@@ -1064,8 +1061,8 @@ kbd {
   border-radius: 4px;
   border: 1px solid var(--border-strong);
   background: var(--bg-hover);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25), inset 0 0.5px 0 var(--bg-hover);
-  font-size: 11px;
+  box-shadow: var(--kbd-shadow);
+  font-size: 10px;
   font-family: var(--font-sans);
   color: var(--text-secondary);
   font-weight: 500;
@@ -1170,7 +1167,7 @@ kbd {
   justify-content: center;
   transition: all var(--transition-fast);
   flex-shrink: 0;
-  margin-left: 8px;
+  margin-left: auto;
 }
 
 .window-pin-btn:hover {
@@ -1185,10 +1182,9 @@ kbd {
 .window-pin-btn.pinned {
   color: var(--accent);
   background: var(--accent-soft);
-  box-shadow: 0 0 6px var(--accent-glow);
 }
 
 .window-pin-btn.pinned:hover {
-  background: rgba(88, 166, 255, 0.15);
+  background: var(--selected-bg-hover);
   color: var(--accent);
 }
