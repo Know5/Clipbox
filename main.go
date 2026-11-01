@@ -73,8 +73,8 @@ func main() {
 
 	err := wails.Run(&options.App{
 		Title:             appName,
-		Width:             400,
-		Height:            560,
+		Width:             defaultWindowWidth,
+		Height:            defaultWindowHeight,
 		MinWidth:          340,
 		MinHeight:         420,
 		AlwaysOnTop:       true,
@@ -94,11 +94,13 @@ func main() {
 			},
 		},
 		Windows: &windows.Options{
-			WebviewIsTransparent:              false,
-			WindowIsTranslucent:               false,
-			WebviewBrowserPath:                "",
-			WebviewUserDataPath:               "", // share system WebView2 runtime
-			WebviewGpuIsDisabled:              true,
+			WebviewIsTransparent: false,
+			WindowIsTranslucent:  false,
+			WebviewBrowserPath:   "",
+			WebviewUserDataPath:  "", // share system WebView2 runtime
+			// 2026-10-29: 原为 true(CPU 软渲染)，每次从隐藏到显示要重画整块窗口，
+			// 是"打开后空白一下才出内容"的主要嫌疑。改回 GPU 合成；若出现黑窗/闪烁，改回 true。
+			WebviewGpuIsDisabled:              false,
 			DisableFramelessWindowDecorations: false,
 		},
 		Bind: []interface{}{

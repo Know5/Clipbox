@@ -28,6 +28,7 @@ type App struct {
 	startHidden    bool
 	lastTarget     uintptr
 	lastToggle     time.Time
+	lastSkipNotice time.Time // 最近一次"未记录"提示的时间（限频，避免连续复制文件刷屏）
 	mu             sync.Mutex
 	settingsMu     sync.Mutex
 	settingsCache  *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
@@ -105,9 +106,32 @@ func (a *App) startup(ctx context.Context) {
 				"message": "图片过大，已跳过记录（超过 50MB）",
 			})
 		case clipboard.SkipReasonBusyClipboard:
+			// 剪贴板被其它程序占着：用户会看到"复制了但列表没变"。30 秒内最多提示一次。
 			a.logErrorf("skipped clipboard update: clipboard busy")
-		case clipboard.SkipReasonReadFailed, clipboard.SkipReasonUnsupportedType:
+			if a.allowSkipNotice(30 * time.Second) {
+				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+					"reason":  string(reason),
+					"message": "剪贴板正被其它程序占用，这一次没能记录",
+				})
+			}
+		case clipboard.SkipReasonUnsupportedType:
+			// 复制文件、富文本等既非纯文本也非位图的内容时不会入库。
+			// 以前只写日志，使用者会以为"我复制了但列表里没有"；现在 10 秒内最多提示一次。
 			a.logErrorf("skipped clipboard update: %s", string(reason))
+			if a.allowSkipNotice(10 * time.Second) {
+				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+					"reason":  string(reason),
+					"message": "这条内容不是文本或图片（如文件、网页富文本），未记录",
+				})
+			}
+		case clipboard.SkipReasonReadFailed:
+			a.logErrorf("skipped clipboard update: %s", string(reason))
+			if a.allowSkipNotice(30 * time.Second) {
+				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+					"reason":  string(reason),
+					"message": "读取剪贴板失败，这一次没能记录",
+				})
+			}
 		}
 	})
 	if err := a.watcher.Start(); err != nil {
@@ -239,8 +263,19 @@ func (a *App) showWindowInternal(captureTarget bool) {
 	a.windowVisible = true
 	a.mu.Unlock()
 
-	x, y := getCursorPos()
-	runtime.WindowSetPosition(a.ctx, int(x)+10, int(y)+10)
+	// 跟随鼠标出现，但整块窗口必须留在鼠标所在显示器的工作区内：
+	// 右下放不下就往左上收边，不越出屏幕（2026-10-29 使用者反馈）。
+	cx, cy := getCursorPos()
+	if wa, ok := windowutil.MonitorWorkArea(cx, cy); ok {
+		// 优先用真实窗口尺寸；取不到（窗口尚未创建等极端情况）时用默认尺寸兜底，
+		// 否则这里会退化成"不挪窗口"，鼠标在屏幕下方时又会跑到屏幕外。
+		w, h := int32(defaultWindowWidth), int32(defaultWindowHeight)
+		if actualW, actualH, ok := windowutil.WindowSize(windowutil.FindWindowByTitle(appName)); ok {
+			w, h = actualW, actualH
+		}
+		x, y := windowutil.PlaceNearCursor(cx, cy, w, h, wa, 10)
+		runtime.WindowSetPosition(a.ctx, int(x), int(y))
+	}
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
@@ -375,17 +410,56 @@ func (a *App) updateTrayState() {
 	})
 }
 
+// allowSkipNotice 限制"未记录"提示的发送频率：minInterval 内只允许一次。
+func (a *App) allowSkipNotice(minInterval time.Duration) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	if now.Sub(a.lastSkipNotice) < minInterval {
+		return false
+	}
+	a.lastSkipNotice = now
+	return true
+}
+
+// notifyPasteFailure 在粘贴失败时给一行界面提示（内容已经在剪贴板里，可手动粘贴）。
+// 10 秒限频，避免连点十次刷满提示。
+func (a *App) notifyPasteFailure() {
+	if a.ctx == nil {
+		return
+	}
+	if !a.allowSkipNotice(10 * time.Second) {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "clip:skipped", map[string]string{
+		"reason":  "paste-failed",
+		"message": "没能粘贴到原窗口（可能是管理员窗口），内容已在剪贴板，按 Ctrl+V 即可",
+	})
+}
+
 func (a *App) pasteToLastTarget() {
 	a.mu.Lock()
 	target := a.lastTarget
 	a.mu.Unlock()
+	a.logInfof("paste start target=%d", target)
 
+	// 内容已在剪贴板中,这里失败不影响手动粘贴,只记录日志(与 Win+V 一致,不弹提示)。
 	if target == 0 {
+		a.logErrorf("paste skipped: no target window")
 		return
 	}
 
-	time.Sleep(150 * time.Millisecond)
-	windowutil.FocusWindow(target)
-	time.Sleep(100 * time.Millisecond)
-	windowutil.SendCtrlV()
+	focused := windowutil.FocusWindow(target)
+	a.logInfof("paste focus target=%d ok=%v", target, focused)
+	if !focused {
+		a.logErrorf("paste aborted: target window did not gain focus hwnd=%d", target)
+		a.notifyPasteFailure()
+		return
+	}
+	if err := windowutil.SendCtrlV(); err != nil {
+		a.logErrorf("paste failed: %v", err)
+		a.notifyPasteFailure()
+		return
+	}
+	a.logInfof("paste sent ctrl+v")
 }

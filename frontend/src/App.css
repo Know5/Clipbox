@@ -521,8 +521,8 @@ body {
 
 /* ── Clip Items ── */
 .clip-item {
-  padding: 9px 10px;
-  margin: 0 0 2px;
+  padding: 5px 8px;
+  margin: 0 0 1px;
   border-radius: var(--radius-sm);
   cursor: pointer;
   transition: background var(--transition-fast), border-color var(--transition-fast);
@@ -599,7 +599,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 5px;
+  margin-bottom: 2px;
 }
 
 .dot {
@@ -680,17 +680,26 @@ body {
   font-size: 11px;
 }
 
+/* 操作按钮浮在条目右侧,不占行高;仅悬停/选中时显示 */
 .clip-actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   gap: 2px;
+  padding: 1px 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--transition-fast);
-  margin-left: auto;
 }
 
 .clip-item:hover .clip-actions,
 .clip-item.selected .clip-actions {
   opacity: 1;
+  pointer-events: auto;
 }
 
 .act {
@@ -744,7 +753,7 @@ body {
   font-size: 12.5px;
   line-height: 1.45;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
@@ -1092,14 +1101,14 @@ kbd {
 .clip-img.thumbnail {
   width: 100%;
   height: 100%;
-  max-height: 120px;
+  max-height: 40px;
   object-fit: contain;
 }
 
 .clip-thumbnail-preview {
   width: 100%;
-  min-height: 88px;
-  max-height: 120px;
+  min-height: 0;
+  max-height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1187,4 +1196,61 @@ kbd {
 .window-pin-btn.pinned:hover {
   background: var(--selected-bg-hover);
   color: var(--accent);
+}
+
+/* ── 右键菜单 ── */
+.ctx-menu {
+  position: fixed;
+  z-index: 3200;
+  min-width: 148px;
+  padding: 4px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+}
+
+.ctx-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-item:hover {
+  background: var(--bg-hover);
+}
+
+.ctx-item.danger {
+  color: var(--danger);
+}
+
+/* 回到最新：列表往下滚后才出现的浮动按钮 */
+.back-to-top {
+  position: fixed;
+  right: 14px;
+  bottom: 16px;
+  z-index: 900;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.back-to-top:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }

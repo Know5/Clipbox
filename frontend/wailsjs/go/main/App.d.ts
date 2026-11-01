@@ -56,6 +56,8 @@ export function OpenDataDir():Promise<void>;
 
 export function QuitApp():Promise<void>;
 
+export function ReadClipboardText():Promise<string>;
+
 export function RunAutoBackupNow():Promise<storage.BackupStats>;
 
 export function RunCleanupNow():Promise<storage.Stats>;

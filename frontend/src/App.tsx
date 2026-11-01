@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
-import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, CopyAndPaste, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip } from "../wailsjs/go/main/App";
+import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, CopyAndPaste, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip, ReadClipboardText } from "../wailsjs/go/main/App";
 import { EventsOn, WindowMinimise } from "../wailsjs/runtime/runtime";
 import Settings from "./Settings";
 import "./App.css";
@@ -55,6 +55,11 @@ interface CopyFeedback {
 }
 
 const PAGE_SIZE = 50;
+
+// 右键菜单：搜索框一套，列表项一套。
+type CtxMenu =
+  | { x: number; y: number; kind: "search" }
+  | { x: number; y: number; kind: "item"; clipId: number };
 type ClipFilter = "all" | "text" | "image";
 
 function describeClearResult(result?: ClearResult) {
@@ -309,7 +314,6 @@ interface ClipItemProps {
   deleteConfirming: boolean;
   deleting: boolean;
   onHover: (id: number) => void;
-  onCopy: (id: number) => void;
   onDouble: (id: number) => void;
   onPin: (id: number) => void;
   onDelete: (id: number) => void;
@@ -326,25 +330,17 @@ const ClipItem = memo(function ClipItem({
   deleteConfirming,
   deleting,
   onHover,
-  onCopy,
   onDouble,
   onPin,
   onDelete,
   onDetail,
 }: ClipItemProps) {
-  const clickTimer = useRef<number>(0);
-
+  // 使用者需求:单击 = 复制并粘贴回原输入框(窗口自动隐藏)。Alt+单击 同样粘贴。
+  // 拖选文字时浏览器仍会触发 click,此处用选区判断排除,避免误粘贴。
   const handleClick = () => {
-    if (clickTimer.current) {
-      window.clearTimeout(clickTimer.current);
-      clickTimer.current = 0;
-      onDouble(clip.id);
-      return;
-    }
-    clickTimer.current = window.setTimeout(() => {
-      clickTimer.current = 0;
-      onCopy(clip.id);
-    }, 300);
+    const selection = window.getSelection();
+    if (selection && selection.toString().length > 0) return;
+    onDouble(clip.id);
   };
 
   const sourceLabel = clipSourceLabel(clip);
@@ -435,6 +431,11 @@ function App() {
   const [clearConfirming, setClearConfirming] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearMessage, setClearMessage] = useState("");
+  const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  // 方向键走到已加载末尾时，加载下一页后自动选中的第一条
+  const pendingSelectNext = useRef(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [deleteDeletingId, setDeleteDeletingId] = useState<number | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>({ clipId: null, message: "", error: false });
@@ -534,6 +535,13 @@ function App() {
       if (seq !== requestSeq.current) return;
       const items = page?.items || [];
       setClips((prev) => append ? mergeClips(prev, items) : items);
+      if (!append) {
+        pendingSelectNext.current = false;
+      } else if (pendingSelectNext.current && items.length > 0) {
+        // 方向键翻页：选到下一页的第一条
+        pendingSelectNext.current = false;
+        setSelectedClipId(items[0].id);
+      }
       setTagOptions(tags || []);
       setTotalClips(page?.total || 0);
       setHasMore(Boolean(page?.hasMore));
@@ -584,6 +592,14 @@ function App() {
     });
     const unsub2 = EventsOn("window:shown", () => {
       setTimeout(() => searchRef.current?.focus(), 100);
+      // 每次重新打开都回到最新一页，避免滚到底后加载的分页"常驻"成 100/500、200/500。
+      if (clipsRef.current.length > PAGE_SIZE) {
+        setClips((prev) => prev.slice(0, PAGE_SIZE));
+        setHasMore(true);
+        setSelectedClipId(null);
+      }
+      if (listRef.current) listRef.current.scrollTop = 0;
+      setShowBackToTop(false);
     });
     const unsub3 = EventsOn("clips:changed", () => {
       const activeSearch = searchValueRef.current.trim();
@@ -693,6 +709,53 @@ function App() {
       console.error(e);
     }
   }, []);
+
+  // ── 右键菜单（搜索框项 / 列表项）──
+  const openSearchMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, kind: "search" });
+  }, []);
+
+  const openItemMenu = useCallback((e: React.MouseEvent) => {
+    const target = (e.target as HTMLElement).closest("[data-clip-id]");
+    if (!target) {
+      e.preventDefault();
+      setCtxMenu(null);
+      return;
+    }
+    const id = Number(target.getAttribute("data-clip-id"));
+    if (!Number.isFinite(id)) return;
+    e.preventDefault();
+    setSelectedClipId(id);
+    setCtxMenu({ x: e.clientX, y: e.clientY, kind: "item", clipId: id });
+  }, []);
+
+  const handlePasteSearch = useCallback(async () => {
+    setCtxMenu(null);
+    try {
+      const text = await ReadClipboardText();
+      // 搜索框是单行：只取第一行，避免把整段文本塞进去
+      const line = (text || "").split(/\r?\n/)[0].trim();
+      if (line) setSearch(line);
+      searchRef.current?.focus();
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  // 菜单关闭：点任意处、窗口失焦、尺寸变化
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("resize", close);
+    };
+  }, [ctxMenu]);
 
   const handleDelete = useCallback(async (id: number) => {
     cancelDeleteConfirmTimer();
@@ -816,6 +879,21 @@ function App() {
     }
   };
 
+  // 滚动到底自动加载下一页（剩 240px 时提前触发），不用再点"加载更多"。
+  const handleListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setShowBackToTop(el.scrollTop > 120);
+    if (!hasMore || loadingMore || listLoading) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) {
+      loadClipPage(clipsRef.current.length, true, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
+    }
+  };
+
+  const backToTop = () => {
+    if (listRef.current) listRef.current.scrollTop = 0;
+    setShowBackToTop(false);
+  };
+
   const filtered = clips;
   const selectedIndex = selectedClipId == null ? -1 : filtered.findIndex((clip) => clip.id === selectedClipId);
   const selectedClip = selectedIndex >= 0 ? filtered[selectedIndex] : null;
@@ -870,6 +948,14 @@ function App() {
       // 搜索框是键盘导航的起点：放行 ↑↓/Enter 直接操作列表，其余按键正常输入文字。
       const isSearchInput = target === searchRef.current;
       if (isInput && !isSearchInput) return;
+      // Home = 一下回到最新（列表顶部），不用滚回去（2026-10-29 使用者要求）
+      if (e.key === "Home" && !isInput) {
+        if (filtered.length === 0) return;
+        e.preventDefault();
+        setSelectedClipId(filtered[0].id);
+        if (listRef.current) listRef.current.scrollTop = 0;
+        return;
+      }
       const selectAt = (index: number) => {
         if (filtered[index]) {
           setSelectedClipId(filtered[index].id);
@@ -879,7 +965,16 @@ function App() {
       if (e.key === "ArrowDown") {
         if (filtered.length === 0) return;
         e.preventDefault();
-        selectAt(selectedIndex < 0 ? 0 : Math.min(selectedIndex + 1, filtered.length - 1));
+        if (selectedIndex >= filtered.length - 1) {
+          // 已选到最后一条：自动加载下一页并选中新页第一条，
+          // 否则键盘最多只能走到当前页第 50 条。
+          if (hasMore && !loadingMore && !listLoading) {
+            pendingSelectNext.current = true;
+            loadClipPage(clipsRef.current.length, true, searchValueRef.current.trim(), filterValueRef.current, selectedTagRef.current);
+          }
+          return;
+        }
+        selectAt(selectedIndex < 0 ? 0 : selectedIndex + 1);
         return;
       }
       if (e.key === "ArrowUp") {
@@ -888,11 +983,41 @@ function App() {
         selectAt(selectedIndex < 0 ? 0 : Math.max(selectedIndex - 1, 0));
         return;
       }
+      // P = 置顶 / 取消置顶（规格 4.2）
+      if (e.key.toLowerCase() === "p" && !isInput && !e.ctrlKey && !e.altKey) {
+        const targetClip = selectedClip || filtered[0];
+        if (!targetClip) return;
+        e.preventDefault();
+        handlePin(targetClip.id);
+        return;
+      }
+      // 对齐 Maccy 的 ⌘+数字:Ctrl+1~9 选中第 n 条并复制;Alt+1~9 复制并粘贴。
+      // 只在带修饰键时生效,所以搜索框里的普通数字仍可正常输入。
+      if (/^[1-9]$/.test(e.key) && (e.ctrlKey || e.altKey) && !e.metaKey) {
+        const index = Number(e.key) - 1;
+        const targetClip = filtered[index];
+        if (!targetClip) return;
+        e.preventDefault();
+        setSelectedClipId(targetClip.id);
+        if (e.altKey) {
+          handleDoubleClick(targetClip.id);
+        } else {
+          handleCopy(targetClip.id);
+        }
+        return;
+      }
       if (e.key === "Enter") {
         const targetClip = selectedClip || filtered[0];
         if (!targetClip) return;
         e.preventDefault();
-        handleCopy(targetClip.id);
+        // 2026-10-29 使用者决定:回车与单击语义统一 = 复制并粘贴回原窗口。
+        // 以前回车只复制(跟随 auto_paste 设置),看起来像"按了没反应"。
+        // 只想复制时按 Ctrl+回车(与 Ctrl+1~9 的"只复制"一致)。
+        if (e.ctrlKey) {
+          handleCopy(targetClip.id);
+        } else {
+          handleDoubleClick(targetClip.id);
+        }
         return;
       }
       if (e.key === "Delete" && !isInput) {
@@ -913,7 +1038,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", down);
     };
-  }, [closeDetail, detailOpen, filtered, handleCopy, handleOpenDetail, requestDelete, search, selectedClip, selectedIndex, showSettings]);
+  }, [closeDetail, detailOpen, filtered, handleCopy, handleDoubleClick, handleOpenDetail, handlePin, hasMore, listLoading, loadClipPage, loadingMore, requestDelete, search, selectedClip, selectedIndex, showSettings]);
 
   const emptyTitle = search.trim() ? "没有匹配记录" : "暂无剪贴板记录";
   const emptyHint = search.trim()
@@ -965,6 +1090,7 @@ function App() {
           placeholder="搜索剪贴板历史..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onContextMenu={openSearchMenu}
         />
       </div>
 
@@ -1007,7 +1133,7 @@ function App() {
         </div>
       )}
 
-      <div className="clip-list" role="listbox" aria-label="剪贴板历史列表">
+      <div className="clip-list" ref={listRef} role="listbox" aria-label="剪贴板历史列表" onContextMenu={openItemMenu} onScroll={handleListScroll}>
         {listError && <div className="list-error" role="alert">{listError}</div>}
         {listLoading && clips.length === 0 && (
           <div className="empty">
@@ -1036,7 +1162,6 @@ function App() {
             deleteConfirming={deleteConfirmId === clip.id}
             deleting={deleteDeletingId === clip.id}
             onHover={handleHover}
-            onCopy={handleCopy}
             onPin={handlePin}
             onDelete={requestDelete}
             onDouble={handleDoubleClick}
@@ -1054,6 +1179,38 @@ function App() {
           </div>
         )}
       </div>
+      {showBackToTop && (
+        <button className="back-to-top" onClick={backToTop} title="回到最新（快捷键 Home）">
+          ↑ 最新
+        </button>
+      )}
+      {ctxMenu && (
+        <div
+          className="ctx-menu"
+          style={{
+            left: Math.min(ctxMenu.x, window.innerWidth - 170),
+            top: Math.min(ctxMenu.y, window.innerHeight - 230),
+          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {ctxMenu.kind === "search" ? (
+            <>
+              <button className="ctx-item" onClick={handlePasteSearch}>粘贴</button>
+              <button className="ctx-item" onClick={() => { searchRef.current?.select(); setCtxMenu(null); }}>全选</button>
+              <button className="ctx-item" onClick={() => { setSearch(""); searchRef.current?.focus(); setCtxMenu(null); }}>清空搜索</button>
+            </>
+          ) : (
+            <>
+              <button className="ctx-item" onClick={() => { handleCopy(ctxMenu.clipId); setCtxMenu(null); }}>复制</button>
+              <button className="ctx-item" onClick={() => { handleDoubleClick(ctxMenu.clipId); setCtxMenu(null); }}>复制并粘贴</button>
+              <button className="ctx-item" onClick={() => { handlePin(ctxMenu.clipId); setCtxMenu(null); }}>置顶 / 取消置顶</button>
+              <button className="ctx-item" onClick={() => { handleOpenDetail(ctxMenu.clipId).catch(console.error); setCtxMenu(null); }}>详情</button>
+              <button className="ctx-item danger" onClick={() => { requestDelete(ctxMenu.clipId); setCtxMenu(null); }}>删除</button>
+            </>
+          )}
+        </div>
+      )}
       {detailOpen && (
         <ClipDetailPanel
           clip={detailClip}

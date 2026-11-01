@@ -106,6 +106,10 @@ export function QuitApp() {
   return window['go']['main']['App']['QuitApp']();
 }
 
+export function ReadClipboardText() {
+  return window['go']['main']['App']['ReadClipboardText']();
+}
+
 export function RunAutoBackupNow() {
   return window['go']['main']['App']['RunAutoBackupNow']();
 }

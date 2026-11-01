@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"golang.org/x/sys/windows/registry"
+)
 
 func TestExtractExePath(t *testing.T) {
 	cases := []struct {
@@ -63,5 +67,41 @@ func TestStartupCommandMatchesExecutable(t *testing.T) {
 				t.Fatalf("startupCommandMatchesExecutable(%q, %q) = %v, want %v", tc.command, tc.executable, got, tc.want)
 			}
 		})
+	}
+}
+
+// readRunValue 读取当前用户的 Run 键值（只读）。
+func readRunValue(t *testing.T, name string) string {
+	t.Helper()
+	key, err := registry.OpenKey(registry.CURRENT_USER, startupRegistryPath, registry.QUERY_VALUE)
+	if err != nil {
+		return ""
+	}
+	defer key.Close()
+	value, _, err := key.GetStringValue(name)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// TestSetStartAtLoginNeverWritesFromTestBinary 钉住 2026-10-29 的事故：
+// 测试进程曾经把自己的临时路径写进 HKCU\...\Run，导致重启后自启指向已删除文件。
+func TestSetStartAtLoginNeverWritesFromTestBinary(t *testing.T) {
+	if !underTest() {
+		t.Fatal("expected the test process to be recognized as a test binary")
+	}
+	before := readRunValue(t, startupRegistryName)
+	if err := setStartAtLogin(true); err != nil {
+		t.Fatalf("setStartAtLogin(true) error = %v", err)
+	}
+	if after := readRunValue(t, startupRegistryName); after != before {
+		t.Fatalf("test binary changed the Run value: %q -> %q", before, after)
+	}
+	if err := setStartAtLogin(false); err != nil {
+		t.Fatalf("setStartAtLogin(false) error = %v", err)
+	}
+	if after := readRunValue(t, startupRegistryName); after != before {
+		t.Fatalf("test binary removed the Run value: %q -> %q", before, after)
 	}
 }

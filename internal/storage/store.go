@@ -212,7 +212,7 @@ func (s *Store) syncSearchIndex() error {
 }
 
 // rebuildSearchIndex does a full FTS5 rebuild. Used only by manual
-	// repair storage - user-triggered, expected to be slow.
+// repair storage - user-triggered, expected to be slow.
 func (s *Store) rebuildSearchIndex() error {
 	if _, err := s.db.Exec(`DELETE FROM clips_fts`); err != nil {
 		return err

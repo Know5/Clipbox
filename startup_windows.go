@@ -15,7 +15,22 @@ const startupRegistryName = "ClipBox"
 // setStartAtLogin writes or removes the ClipBox entry in the per-user Run key,
 // pointing at the CURRENT executable. This keeps auto-start working even when
 // the portable exe is moved to a new folder.
+// underTest 报告当前进程是否为 `go test` 构建的测试二进制。
+//
+// 2026-10-29 定位的事故：TestUpdateAppSettingsFailureKeepsPersistedState 调用
+// UpdateAppSettings → reconcileStartAtLogin(true)，把自己的临时路径写进
+// HKCU\...\Run；随后 DB 写入失败的回滚又因为"注册表已指向自己"而空转，
+// 结果用户的开机自启指向一个测试结束后被删除的文件，重启后静默不启动。
+// 因此测试进程一律不写用户注册表。
+func underTest() bool {
+	name := strings.ToLower(filepath.Base(os.Args[0]))
+	return strings.HasSuffix(name, ".test.exe") || strings.HasSuffix(name, ".test")
+}
+
 func setStartAtLogin(enabled bool) error {
+	if underTest() {
+		return nil
+	}
 	key, _, err := registry.CreateKey(registry.CURRENT_USER, startupRegistryPath, registry.SET_VALUE|registry.QUERY_VALUE)
 	if err != nil {
 		return err

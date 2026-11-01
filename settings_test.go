@@ -9,10 +9,14 @@ import (
 	"clipbox/internal/windowutil"
 )
 
-func TestDefaultAppSettingsEnableAutoPaste(t *testing.T) {
+// 对齐 Maccy:默认只复制,自动粘贴需用户手动开启。
+func TestDefaultAppSettingsDisableAutoPaste(t *testing.T) {
 	settings := defaultAppSettings()
-	if !settings.AutoPaste {
-		t.Fatal("default AutoPaste = false, want true")
+	if settings.AutoPaste {
+		t.Fatal("default AutoPaste = true, want false (Maccy 对齐)")
+	}
+	if settings.MaxClips != 500 {
+		t.Fatalf("default MaxClips = %d, want 500", settings.MaxClips)
 	}
 	if !settings.RecordSourceInfo {
 		t.Fatal("default RecordSourceInfo = false, want true")

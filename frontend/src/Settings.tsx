@@ -115,7 +115,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   skipSensitiveText: false,
   recordSourceInfo: true,
   startAtLogin: false,
-  autoPaste: true,
+  autoPaste: false,
   theme: "dark",
   minTextLength: 1,
   maxClips: 500,
@@ -902,8 +902,8 @@ export default function Settings({ onBack }: SettingsProps) {
             </label>
             <label className="setting-row">
               <div>
-                <div className="hotkey-label">自动粘贴</div>
-                <div className="hotkey-description">选择历史项后模拟 Ctrl+V 到上一个窗口</div>
+                <div className="hotkey-label">复制时顺带粘贴</div>
+                <div className="hotkey-description">仅影响 Ctrl+回车 与 Ctrl+数字；回车/单击始终粘贴</div>
               </div>
               <input
                 className="toggle-input"

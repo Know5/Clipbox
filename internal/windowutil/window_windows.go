@@ -1,6 +1,7 @@
 package windowutil
 
 import (
+	"fmt"
 	"path/filepath"
 	"syscall"
 	"time"
@@ -131,9 +132,18 @@ func processImagePath(pid uint32) string {
 	return syscall.UTF16ToString(buf[:size])
 }
 
-func FocusWindow(hwnd uintptr) {
+// focusPollInterval 和 focusTimeout 控制等待前台切换的节奏。
+// 用轮询代替固定 Sleep:焦点一切过去就返回,最多等 focusTimeout。
+const (
+	focusPollInterval = 5 * time.Millisecond
+	focusTimeout      = 100 * time.Millisecond
+)
+
+// FocusWindow 尝试把 hwnd 切换为前台窗口,并确认切换成功。
+// 返回 false 表示超时仍未获得焦点(例如目标是管理员窗口,UIPI 阻止了切换)。
+func FocusWindow(hwnd uintptr) bool {
 	if hwnd == 0 {
-		return
+		return false
 	}
 
 	currThread, _, _ := procGetCurrentThreadId.Call()
@@ -150,15 +160,32 @@ func FocusWindow(hwnd uintptr) {
 	iconic, _, _ := procIsIconic.Call(hwnd)
 	if iconic != 0 {
 		procShowWindow.Call(hwnd, swRestore)
-		time.Sleep(20 * time.Millisecond)
 	}
 
 	procAllowSetForegroundWindow.Call(0xFFFFFFFF)
 	procSetForeground.Call(hwnd)
-	time.Sleep(60 * time.Millisecond)
+
+	return waitForForeground(hwnd, focusTimeout, focusPollInterval, ForegroundWindow)
 }
 
-func SendCtrlV() {
+// waitForForeground 轮询 current 直到返回 hwnd,或超过 timeout。
+// current 作为参数传入,便于单元测试超时和成功两个分支。
+func waitForForeground(hwnd uintptr, timeout, interval time.Duration, current func() uintptr) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if current() == hwnd {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(interval)
+	}
+}
+
+// SendCtrlV 注入 Ctrl+V 按键,返回成功注入的事件数是否等于 4。
+// 被 UIPI 阻止时 SendInput 返回 0 或少于 4。
+func SendCtrlV() error {
 	inputs := []input{
 		keyDown(vkControl),
 		keyDown(vKeyV),
@@ -166,11 +193,15 @@ func SendCtrlV() {
 		keyUp(vkControl),
 	}
 
-	procSendInput.Call(
+	sent, _, _ := procSendInput.Call(
 		uintptr(len(inputs)),
 		uintptr(unsafe.Pointer(&inputs[0])),
 		unsafe.Sizeof(inputs[0]),
 	)
+	if int(sent) != len(inputs) {
+		return fmt.Errorf("SendInput 只注入了 %d/%d 个事件", sent, len(inputs))
+	}
+	return nil
 }
 
 func keyDown(key uint16) input {

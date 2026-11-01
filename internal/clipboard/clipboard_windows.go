@@ -864,3 +864,40 @@ func WriteTextToClipboard(text string) error {
 func WriteImageToClipboard(dibData []byte) error {
 	return WriteDibToClipboard(dibData)
 }
+
+// ReadText 读取剪贴板里的 Unicode 文本，不写历史。
+// 供搜索框右键"粘贴"使用；剪贴板被占用且无法打开时返回错误。
+func ReadText() (string, error) {
+	ret, _, _ := procOpenClipboard.Call(0)
+	if ret == 0 {
+		return "", errorString("剪贴板正被其它程序占用")
+	}
+	defer procCloseClipboard.Call()
+
+	if avail, _, _ := procIsClipboardFormatAvailable.Call(CF_UNICODETEXT); avail == 0 {
+		return "", nil
+	}
+	h, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
+	if h == 0 {
+		return "", errorString("剪贴板中没有文本")
+	}
+	sz, _, _ := procGlobalSize.Call(h)
+	if sz == 0 || sz > 10*1024*1024 {
+		return "", errorString("剪贴板文本大小异常")
+	}
+	ptr, _, _ := procGlobalLock.Call(h)
+	if ptr == 0 {
+		return "", errorString("无法锁定剪贴板内存")
+	}
+	defer procGlobalUnlock.Call(h)
+
+	count := int(sz / 2)
+	if count < 1 {
+		return "", nil
+	}
+	return syscall.UTF16ToString(uint16SliceFromPointer(ptr, count)), nil
+}
+
+type errorString string
+
+func (e errorString) Error() string { return string(e) }

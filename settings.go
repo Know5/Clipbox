@@ -54,7 +54,7 @@ func defaultAppSettings() AppSettings {
 		SkipSensitiveText:      false,
 		RecordSourceInfo:       true,
 		StartAtLogin:           false,
-		AutoPaste:              true,
+		AutoPaste:              false, // 对齐 Maccy:默认只复制,不自动粘贴
 		Theme:                  "dark",
 		MinTextLength:          1,
 		MaxClips:               500,

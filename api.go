@@ -482,12 +482,28 @@ func (a *App) CopyToClipboard(id int64) error {
 // CopyAndPaste copies the clip AND immediately pastes it into the
 // previously active window. Unlike CopyToClipboard, this always pastes
 // regardless of the auto-paste setting and does not hide the window.
+// 先隐藏 ClipBox 窗口,再把焦点还给原窗口并发送 Ctrl+V。
+// 否则 ClipBox 仍在前台,FocusWindow 会与它争焦点,粘贴常失败。
 func (a *App) CopyAndPaste(id int64) error {
+	a.logInfof("CopyAndPaste called id=%d", id)
 	if _, err := a.copyEntryToClipboard(id); err != nil {
+		a.logErrorf("CopyAndPaste copy failed id=%d: %v", id, err)
 		return err
+	}
+	// 窗口被固定(pinned)时不隐藏，与 CopyToClipboard 保持一致。
+	a.mu.Lock()
+	pinned := a.windowPinned
+	a.mu.Unlock()
+	if !pinned {
+		a.hideWindow()
 	}
 	go a.pasteToLastTarget()
 	return nil
+}
+
+// ReadClipboardText 返回剪贴板里的文本，供搜索框右键"粘贴"使用（不写历史）。
+func (a *App) ReadClipboardText() (string, error) {
+	return clipboard.ReadText()
 }
 
 // loadImageDib reads DIB data for an image entry.
