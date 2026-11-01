@@ -109,9 +109,11 @@ if (-not $SkipBuild) {
     Invoke-Checked "go vet" "go" @("vet", "./...")
     Invoke-Checked "npm audit" "npm.cmd" @("audit", "--audit-level=high") $FrontendDir
     if ($BuildInstaller) {
-        Invoke-Checked "wails build --nsis" "wails" @("build", "--nsis")
+        Invoke-Checked "wails build --nsis -trimpath" "wails" @("build", "--nsis", "-trimpath")
     } else {
-        Invoke-Checked "wails build" "wails" @("build")
+        # -trimpath: keep the build machine's absolute paths (user name, project folder)
+        # out of the shipped binary; they otherwise appear in panic traces and strings.
+        Invoke-Checked "wails build -trimpath" "wails" @("build", "-trimpath")
     }
 }
 
@@ -190,7 +192,10 @@ if (-not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
 if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesUrl)) {
     $manifest["releaseNotesUrl"] = $ReleaseNotesUrl.Trim()
 }
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 -Path $manifestPath
+# Write manifests as UTF-8 without BOM: update.go parses them with json.Unmarshal,
+# and Windows PowerShell's "-Encoding UTF8" prepends a BOM that breaks parsing.
+$manifestJson = $manifest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($manifestPath, $manifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
 $packageFiles = @(Get-ChildItem -LiteralPath $releaseDir -File | Select-Object -ExpandProperty FullName)
 if ($packageFiles.Count -eq 0) {
@@ -222,7 +227,8 @@ if (-not [string]::IsNullOrWhiteSpace($DownloadUrl)) {
 if (-not [string]::IsNullOrWhiteSpace($ReleaseNotesUrl)) {
     $updateManifest["releaseNotesUrl"] = $ReleaseNotesUrl.Trim()
 }
-$updateManifest | ConvertTo-Json -Depth 6 | Set-Content -Encoding UTF8 -Path $updateManifestPath
+$updateManifestJson = $updateManifest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($updateManifestPath, $updateManifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
 $checksumEntries = @()
 foreach ($artifact in @($zipPath, (Join-Path $releaseDir "ClipBox.exe"), $installerCopy, $updateManifestPath)) {
