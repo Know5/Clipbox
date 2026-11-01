@@ -4,7 +4,7 @@ Windows 剪贴板历史工具。`Ctrl+Alt+V` 唤起，输入即搜，选中即�
 
 ## 安装
 
-到 [Releases](https://github.com/Know5/Clipbox/releases) 下载 `ClipBox-x.y.z-windows-amd64.zip`，解压后运行 `ClipBox.exe`，无需安装。
+到 [Releases](https://github.com/Know5/Clipbox/releases) 下载 `ClipBox-<版本号>-windows-amd64.zip`，解压后运行 `ClipBox.exe`，无需安装。
 
 - 需要 Microsoft Edge WebView2 运行时（Windows 11 和新版 Windows 10 已内置）。
 - 未做代码签名，SmartScreen 拦截时点「更多信息」→「仍要运行」。
