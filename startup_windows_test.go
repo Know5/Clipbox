@@ -70,6 +70,33 @@ func TestStartupCommandMatchesExecutable(t *testing.T) {
 	}
 }
 
+// TestStartupEntryNeedsRepair 钉住 2026-11-06 的事故：临时副本运行一次就把自启
+// 改写成自己，副本删除后开机不再启动。指向另一个仍存在的副本时必须保持不动，
+// 只有缺失、指向已删除文件、或指向自己但缺 --hidden 时才改写。
+func TestStartupEntryNeedsRepair(t *testing.T) {
+	const self = `C:\Users\u\AppData\Local\Programs\ClipBox\ClipBox.exe`
+	existing := map[string]bool{self: true, `D:\Tools\ClipBox.exe`: true}
+	missing := func(path string) bool { return !existing[path] }
+	cases := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"no entry", ``, true},
+		{"already points here", `"` + self + `" --hidden`, false},
+		{"points here without --hidden", `"` + self + `"`, true},
+		{"another copy that still exists", `"D:\Tools\ClipBox.exe" --hidden`, false},
+		{"a copy that was deleted", `"C:\repo\dist\release\verify-exe.exe" --hidden`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := startupEntryNeedsRepair(tc.command, self, missing); got != tc.want {
+				t.Fatalf("startupEntryNeedsRepair(%q) = %v, want %v", tc.command, got, tc.want)
+			}
+		})
+	}
+}
+
 // readRunValue 读取当前用户的 Run 键值（只读）。
 func readRunValue(t *testing.T, name string) string {
 	t.Helper()

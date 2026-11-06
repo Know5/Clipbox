@@ -4,7 +4,7 @@ Windows 剪贴板历史工具。`Ctrl+Alt+V` 唤起，输入即搜，选中即�
 
 ## 安装
 
-到 [Releases](https://github.com/Know5/Clipbox/releases) 下载 `ClipBox-<版本号>-windows-amd64.zip`，解压后运行 `ClipBox.exe`，无需安装。
+到 [Releases](https://github.com/Know5/Clipbox/releases) 下载 `ClipBox-<版本号>-windows-amd64.zip`，解压到固定位置（如 `%LOCALAPPDATA%\Programs\ClipBox`）后运行 `ClipBox.exe`，无需安装。开机自启记的是这个文件的路径；升级时先在托盘菜单里退出，再用新版覆盖它。
 
 - 需要 Microsoft Edge WebView2 运行时（Windows 11 和新版 Windows 10 已内置）。
 - 未做代码签名，SmartScreen 拦截时点「更多信息」→「仍要运行」。
@@ -53,14 +53,15 @@ Windows 剪贴板历史工具。`Ctrl+Alt+V` 唤起，输入即搜，选中即�
 ## 常见问题
 
 - **热键没反应**：组合键被其他软件占用，到设置里换一个。
+- **热键设不上**：`Ctrl`/`Alt` + `1`~`9`、`Ctrl+回车`、`Ctrl+C`/`V`/`X` 是列表和粘贴要用的键，不能当唤起热键。旧版本设成这些的，升级后首次启动会改回 `Ctrl+Alt+V` 并提示一次。
 - **复制了但列表没变化**：文件、富文本和超大内容不记录；剪贴板被其他程序占用；命中排除规则或敏感内容。界面会给一行提示。
 - **粘贴没落到目标窗口**：目标窗口以管理员权限运行或系统阻止了焦点切换。内容已在剪贴板，手动 `Ctrl+V` 即可。
-- **开机不自启**：到设置里重新打开「开机自启」。
+- **开机不自启**：自启只记一个 `ClipBox.exe` 的路径。那个文件被删除或移走后，下次运行 ClipBox 会自动改指当前这份；另一份还在时不会被抢走，想换成当前这份，到设置里把「开机自启」关掉再打开。
 - **搜索不准**：「设置 → 修复存储」重建索引。
 
 ## 开发
 
-需要 Go、Node.js、Wails v2 CLI 和 WebView2。
+需要 Go 1.26+（`go.mod` 固定 `toolchain go1.27.3`，缺了会自动下载）、Node.js 20.19+ 或 22.12+、Wails CLI v2.17.1 和 WebView2。
 
 ```powershell
 git clone https://github.com/Know5/Clipbox.git

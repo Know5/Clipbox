@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"clipbox/internal/clipboard"
+	"clipbox/internal/hotkey"
 	"clipbox/internal/storage"
 )
 
@@ -191,4 +192,36 @@ func minimalDib() []byte {
 	dib[41] = 0xff
 	dib[42] = 0xff
 	return dib
+}
+
+func TestReservedHotkeyReason(t *testing.T) {
+	const (
+		ctrl  = hotkey.ModControl
+		alt   = hotkey.ModAlt
+		shift = hotkey.ModShift
+	)
+	cases := []struct {
+		name      string
+		modifiers int
+		keyCode   int
+		reserved  bool
+	}{
+		{"Ctrl+1 copies the first clip", ctrl, '1', true},
+		{"Alt+9 pastes the ninth clip", alt, '9', true},
+		{"Ctrl+Alt+3 also reaches the list shortcut", ctrl | alt, '3', true},
+		{"Ctrl+Numpad5 triggers the same list shortcut", ctrl, 0x65, true},
+		{"Ctrl+Enter copies only", ctrl, 0x0D, true},
+		{"Ctrl+V is the paste ClipBox sends", ctrl, 'V', true},
+		{"Ctrl+0 is not a list shortcut", ctrl, '0', false},
+		{"Ctrl+Shift+1 types a symbol, not a digit", ctrl | shift, '1', false},
+		{"default Ctrl+Alt+V", ctrl | alt, 'V', false},
+		{"Ctrl+Shift+V", ctrl | shift, 'V', false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := reservedHotkeyReason(tc.modifiers, tc.keyCode) != ""; got != tc.reserved {
+				t.Fatalf("reservedHotkeyReason(%#x, %#x) reserved = %v, want %v", tc.modifiers, tc.keyCode, got, tc.reserved)
+			}
+		})
+	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -146,8 +147,8 @@ func (a *App) startup(ctx context.Context) {
 
 	modStr, _ := a.store.GetSetting("hotkey_modifiers")
 	vkStr, _ := a.store.GetSetting("hotkey_key")
-	mod := uint32(hotkey.ModControl | hotkey.ModAlt)
-	vk := uint32(0x56)
+	defaultMod, defaultVK := uint32(hotkey.ModControl|hotkey.ModAlt), uint32(0x56)
+	mod, vk := defaultMod, defaultVK
 	if modStr != "" {
 		if v, err := strconv.ParseUint(modStr, 10, 32); err == nil {
 			mod = uint32(v)
@@ -157,6 +158,24 @@ func (a *App) startup(ctx context.Context) {
 		if v, err := strconv.ParseUint(vkStr, 10, 32); err == nil {
 			vk = uint32(v)
 		}
+	}
+	// 0.2.1 及更早允许把热键设成 Ctrl+1 这类列表快捷键，全局注册后列表里的同名快捷键失效。
+	// 存量设置改回默认并落盘；提示框异步弹出，不阻塞下面的热键注册（2026-11-06）。
+	if reason := reservedHotkeyReason(int(mod), int(vk)); reason != "" {
+		previous := hotkeyDisplayName(int(mod), int(vk))
+		a.logErrorf("stored hotkey modifiers=%d key=%d is reserved, reset to default: %s", mod, vk, reason)
+		mod, vk = defaultMod, defaultVK
+		_ = a.store.SetSetting("hotkey_modifiers", strconv.Itoa(int(mod)))
+		_ = a.store.SetSetting("hotkey_key", strconv.Itoa(int(vk)))
+		notice := fmt.Sprintf("原热键 %s 不可用：%s。\n已改回 %s，可在设置里换成其他组合。", previous, reason, hotkeyDisplayName(int(mod), int(vk)))
+		go func() {
+			defer a.recoverGoroutine("hotkeyResetNotice")
+			runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+				Type:    runtime.InfoDialog,
+				Title:   "唤起热键已改回默认",
+				Message: notice,
+			})
+		}()
 	}
 
 	a.hotkeyManager = hotkey.NewManager()
@@ -175,8 +194,8 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 
-	// 开机自启自愈：注册表按 DB 意图对齐到当前 exe 路径（含 --hidden 参数）。
-	// 意图为关时也需要清理残留或指向旧路径的 Run 值。
+	// 开机自启自愈：Run 值缺失、或指向的 exe 已不存在时改指当前 exe；指向另一个
+	// 仍存在的副本时不动，避免临时副本抢走自启。意图为关时清理 Run 值。
 	if err := reconcileStartAtLogin(a.loadStartAtLoginIntent()); err != nil {
 		a.logErrorf("failed to reconcile start-at-login on startup: %v", err)
 	}
@@ -189,20 +208,6 @@ func (a *App) startup(ctx context.Context) {
 		defer a.recoverGoroutine("autoBackup")
 		a.runAutoBackupScheduler()
 	}()
-
-	// Pre-warm WebView2 compositor so the first hotkey press feels instant.
-	// The first WindowShow after process start triggers an expensive first
-	// paint (~100-150ms). Absorb that cost here instead.
-	//
-	// When starting hidden (login auto-start), show the window far off-screen
-	// first so the mandatory paint never flashes on the user's display, then
-	// hide it and restore a sane on-screen position for the next real show.
-	if a.startHidden {
-		runtime.WindowSetPosition(a.ctx, -32000, -32000)
-		runtime.WindowShow(a.ctx)
-		runtime.WindowHide(a.ctx)
-		runtime.WindowSetPosition(a.ctx, 100, 100)
-	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -266,15 +271,14 @@ func (a *App) showWindowInternal(captureTarget bool) {
 	// 跟随鼠标出现，但整块窗口必须留在鼠标所在显示器的工作区内：
 	// 右下放不下就往左上收边，不越出屏幕（2026-10-29 使用者反馈）。
 	cx, cy := getCursorPos()
-	if wa, ok := windowutil.MonitorWorkArea(cx, cy); ok {
-		// 优先用真实窗口尺寸；取不到（窗口尚未创建等极端情况）时用默认尺寸兜底，
-		// 否则这里会退化成"不挪窗口"，鼠标在屏幕下方时又会跑到屏幕外。
-		w, h := int32(defaultWindowWidth), int32(defaultWindowHeight)
-		if actualW, actualH, ok := windowutil.WindowSize(windowutil.FindWindowByTitle(appName)); ok {
-			w, h = actualW, actualH
+	hwnd := windowutil.FindOwnWindow(mainWindowClass, appName)
+	if w, h, ok := windowutil.WindowSize(hwnd); ok {
+		if wa, ok := windowutil.MonitorWorkArea(cx, cy); ok {
+			x, y := windowutil.PlaceNearCursor(cx, cy, w, h, wa, 10)
+			windowutil.MoveWindow(hwnd, x, y)
 		}
-		x, y := windowutil.PlaceNearCursor(cx, cy, w, h, wa, 10)
-		runtime.WindowSetPosition(a.ctx, int(x), int(y))
+	} else {
+		a.logErrorf("show: main window not found, keeping last position")
 	}
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)

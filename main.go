@@ -102,6 +102,7 @@ func main() {
 			// 是"打开后空白一下才出内容"的主要嫌疑。改回 GPU 合成；若出现黑窗/闪烁，改回 true。
 			WebviewGpuIsDisabled:              false,
 			DisableFramelessWindowDecorations: false,
+			WindowClassName:                   mainWindowClass,
 		},
 		Bind: []interface{}{
 			app,

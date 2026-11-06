@@ -12,7 +12,7 @@
   "info": {
     "companyName": "Know5",
     "productName": "ClipBox",
-    "productVersion": "0.2.1",
+    "productVersion": "0.2.2",
     "copyright": "Copyright 2026 Know5",
     "comments": "A lightweight Windows clipboard manager."
   }

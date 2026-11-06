@@ -6,6 +6,7 @@ import (
 	"clipbox/internal/storage"
 	"clipbox/internal/windowutil"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -752,6 +753,9 @@ func (a *App) UpdateHotkey(modifiers, keyCode int) error {
 	if keyCode == 0 {
 		return fmt.Errorf("必须指定一个按键")
 	}
+	if reason := reservedHotkeyReason(modifiers, keyCode); reason != "" {
+		return errors.New(reason)
+	}
 
 	err := a.hotkeyManager.Rebind(uint32(modifiers), uint32(keyCode))
 	if err != nil {
@@ -766,4 +770,24 @@ func (a *App) UpdateHotkey(modifiers, keyCode int) error {
 	_ = a.store.SetSetting("hotkey_key", strconv.Itoa(keyCode))
 	a.logInfof("updated hotkey modifiers=%d key=%d", modifiers, keyCode)
 	return nil
+}
+
+// reservedHotkeyReason returns why a combination cannot be the global hotkey,
+// or "" when it can. RegisterHotKey swallows the combination in every
+// application, so the hotkey must not equal a shortcut ClipBox itself needs:
+// the modified list shortcuts in App.tsx, and the clipboard keys it records and
+// sends when pasting.
+func reservedHotkeyReason(modifiers, keyCode int) string {
+	mods := modifiers & (hotkey.ModControl | hotkey.ModAlt | hotkey.ModShift | hotkey.ModWin)
+	digit := (keyCode >= '1' && keyCode <= '9') || (keyCode >= 0x61 && keyCode <= 0x69) // 1-9, Numpad1-9
+	switch {
+	// App.tsx 对 Ctrl、Alt、Ctrl+Alt 加数字都会触发；带 Shift 时 e.key 变成符号，带 Win 时被排除。
+	case digit && mods != 0 && mods&(hotkey.ModShift|hotkey.ModWin) == 0:
+		return "Ctrl/Alt + 数字 1~9 是 ClipBox 列表里复制或粘贴第 n 条的快捷键，不能用作唤起热键"
+	case mods == hotkey.ModControl && keyCode == 0x0D:
+		return "Ctrl + 回车 是 ClipBox 列表里只复制的快捷键，不能用作唤起热键"
+	case mods == hotkey.ModControl && (keyCode == 'C' || keyCode == 'V' || keyCode == 'X'):
+		return "Ctrl + C/V/X 是系统的复制粘贴键，ClipBox 靠它们记录和粘贴，不能用作唤起热键"
+	}
+	return ""
 }

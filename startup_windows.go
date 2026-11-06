@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +14,6 @@ import (
 const startupRegistryPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 const startupRegistryName = "ClipBox"
 
-// setStartAtLogin writes or removes the ClipBox entry in the per-user Run key,
-// pointing at the CURRENT executable. This keeps auto-start working even when
-// the portable exe is moved to a new folder.
 // underTest 报告当前进程是否为 `go test` 构建的测试二进制。
 //
 // 2026-10-29 定位的事故：TestUpdateAppSettingsFailureKeepsPersistedState 调用
@@ -27,6 +26,8 @@ func underTest() bool {
 	return strings.HasSuffix(name, ".test.exe") || strings.HasSuffix(name, ".test")
 }
 
+// setStartAtLogin writes or removes the ClipBox entry in the per-user Run key,
+// pointing at the CURRENT executable.
 func setStartAtLogin(enabled bool) error {
 	if underTest() {
 		return nil
@@ -52,48 +53,75 @@ func setStartAtLogin(enabled bool) error {
 	return key.SetStringValue(startupRegistryName, command)
 }
 
-// startupRegistryEntry returns the raw command stored in the Run key and
-// whether it points at this executable with the required hidden-start flag.
-func startupRegistryEntry() (value string, pointsHere bool) {
+// startupRegistryValue returns the raw command stored in the Run key, or "".
+func startupRegistryValue() string {
 	key, err := registry.OpenKey(registry.CURRENT_USER, startupRegistryPath, registry.QUERY_VALUE)
 	if err != nil {
-		return "", false
+		return ""
 	}
 	defer key.Close()
 
-	value, _, err = key.GetStringValue(startupRegistryName)
+	value, _, err := key.GetStringValue(startupRegistryName)
 	if err != nil {
-		return "", false
+		return ""
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return value, false
-	}
-	return value, startupCommandMatchesExecutable(value, exe)
+	return value
 }
 
 // registryHasStartupEntry reports whether ANY ClipBox Run entry exists,
 // regardless of which path it points to. Used for one-time migration of the
 // intent flag for users upgrading from the registry-as-source-of-truth build.
 func registryHasStartupEntry() bool {
-	value, _ := startupRegistryEntry()
-	return strings.TrimSpace(value) != ""
+	return strings.TrimSpace(startupRegistryValue()) != ""
 }
 
-// reconcileStartAtLogin makes the registry match the intended state using the
-// current executable path. When enabling, it always rewrites the value so a
-// relocated portable exe self-heals its stale/dangling Run entry.
+// reconcileStartAtLogin aligns the Run key with the intended state; it runs at
+// startup and on every settings save. When enabled it only repairs the entry
+// (see startupEntryNeedsRepair), so a temporary copy of ClipBox cannot take
+// auto-start over from the copy the user installed. Moving auto-start to
+// another copy is explicit: switching it off removes the entry, switching it
+// back on from that copy writes it fresh.
 func reconcileStartAtLogin(intended bool) error {
 	if !intended {
 		return setStartAtLogin(false)
 	}
-	value, pointsHere := startupRegistryEntry()
-	if pointsHere {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	if !startupEntryNeedsRepair(startupRegistryValue(), exe, pathMissing) {
 		return nil
 	}
-	// Missing or pointing elsewhere (relocated exe): rewrite to current path.
-	_ = value
 	return setStartAtLogin(true)
+}
+
+// startupEntryNeedsRepair reports whether the Run command should be rewritten
+// to launch executable: the entry is missing, is ours but lacks --hidden, or
+// launches an exe that no longer exists. An entry owned by another copy that
+// still exists is left alone, whatever its version: a newer copy run from a
+// temporary folder (release verification, an exe opened inside a zip) would
+// otherwise take over and leave the entry dangling once that folder is gone.
+//
+// 2026-11-06 发现：Run 值指向已删除的 dist\release\verify-exe.exe（发版验证时的临时
+// 副本），开机不再启动。旧逻辑只要 Run 值不指向当前 exe 就改写，任何临时副本运行一次
+// 都会抢走自启。
+func startupEntryNeedsRepair(command, executable string, missing func(path string) bool) bool {
+	if startupCommandMatchesExecutable(command, executable) {
+		return false
+	}
+	target := extractExePath(command)
+	if target == "" || strings.EqualFold(filepath.Clean(target), filepath.Clean(executable)) {
+		return true
+	}
+	return missing(target)
+}
+
+// pathMissing reports whether path definitely does not exist. Other Stat
+// errors (for example access denied) count as present, so an entry is never
+// taken over just because its target could not be checked.
+func pathMissing(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // startupValuePointsToSelf parses the first quoted token (the exe path) out of

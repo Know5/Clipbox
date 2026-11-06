@@ -62,3 +62,44 @@
 - [ ] 回车能粘贴回原窗口;Ctrl+回车只复制。
 - [ ] 复制文件时出现"不是文本或图片"提示。
 - [ ] GPU 渲染下窗口无黑屏/闪烁。
+
+## 第 2 步:2026-11-06 0.2.2 维护版
+
+### 改动
+- 工具链与依赖:`go.mod` 改为 go 1.26.0 + `toolchain go1.27.3`;Wails v2.12.0 → v2.17.1,x/net v0.62.0、x/sys v0.49.0、x/text v0.43.0、modernc sqlite v1.61.1;前端按 semver 范围更新(vite 8.3.6、@vitejs/plugin-react 6.2.1)。本机 Wails CLI 升到 v2.17.1。
+  - 依据:0.2.1 用 go1.25.3 构建,`govulncheck` 源码分析可达 22 个标准库漏洞;新构建 `govulncheck -mode=binary` 无漏洞。
+- 开机自启(`startup_windows.go` `startupEntryNeedsRepair`):启动和保存设置时,只在 Run 值缺失、指向自己但缺 `--hidden`、或指向的 exe 已不存在时改写;指向另一份仍存在的副本时不动。
+  - 归因:Run 值指向已删除的 `dist\release\verify-exe.exe`(发版验证的临时副本),11-01 之后开机不再启动。旧逻辑只要 Run 值不指向当前 exe 就改写,任何临时副本运行一次都会抢走自启。
+  - 代价:新版本解压到新目录运行时不会自动接管,需在设置里把开机自启关掉再打开(README 已写)。
+  - 回归测试 `TestStartupEntryNeedsRepair`。
+- 唤起热键(`api.go` `reservedHotkeyReason`):拒绝 Ctrl/Alt/Ctrl+Alt + 1~9(含小键盘)、Ctrl+回车、Ctrl+C/V/X。启动时存量热键命中则改回 Ctrl+Alt+V、落盘,并异步弹一次提示(`app.go` startup)。
+  - 归因:本机热键是 Ctrl+1,全局注册后列表里 Ctrl+1(复制第 1 条)失效,其他程序里的 Ctrl+1 也失效。
+  - 回归测试 `TestReservedHotkeyReason`。
+- 版本号 0.2.2(`metadata.go`、`wails.json`)。
+
+### 修复:隐藏启动抢焦点(0.2.1 起就有)
+- 预热(`app.go` startup 末尾 `runtime.WindowShow` → `WindowHide`)整个去掉。Wails v2.17.1 的 `WindowShow` 会调用 `SetForegroundWindow` + `SetFocus`(`internal/frontend/desktop/windows/frontend.go` `ShowWindow`),隐藏启动后把用户当前窗口(本机是全屏游戏)的前台和键盘焦点抢进 ClipBox;按键落进列表就会 `CopyAndPaste`,窗口却始终不可见。
+  - 现象(0.2.1/0.2.2 实测):隐藏启动 2 秒后日志出现 `CopyAndPaste called id=22`、`paste start target=0`,测试没有发送按键。
+- 为什么不是"改成屏幕外不激活显示":实测这次显示+隐藏之间的可见期不到 5 ms(5 ms 轮询只抓到 1 个样本),60Hz 下连一帧都排不出来;而且屏幕外的窗口不在任何显示器上,Chromium 会把它算作被遮挡、暂停出帧[推断]。这个预热从 0.2.1 起就没画过东西,只是白抢焦点;留着还多一次启动时动窗口的风险。
+  - 代价:首次唤起要付 WebView2 首次合成的开销。若体感变慢,再做"真的预热"并先测量,不凭猜。
+
+### 修复:窗口定位与主窗口查找
+- `showWindowInternal` 原用 `runtime.WindowSetPosition` 定位。Wails 把参数当作**相对窗口当前所在显示器工作区原点**的偏移(`winc/controlbase.go` `SetPos` 加 `workRect.Left/Top`),而 `windowutil.PlaceNearCursor` 返回的是屏幕绝对坐标。单屏且任务栏在底部时工作区原点是 (0,0),看不出问题;任务栏在顶部/左侧或窗口在副屏时会多挪一个工作区原点,可能挪出屏幕。
+- 改为 `windowutil.MoveWindow`(直接 `SetWindowPos`,带 `SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE`)。
+- 找窗口从 `FindWindowByTitle` 换成 `windowutil.FindOwnWindow(类名, 标题)`:只按标题找会命中别的进程的同名窗口(例如资源管理器打开名为 `ClipBox` 的文件夹),按类名 + 本进程 PID 过滤。主窗口类名由 `mainWindowClass` 写进 Wails 选项(`main.go` `WindowClassName`)。
+
+### 自动验证
+- `gofmt`、`go vet`、`go test ./...` 通过;`wails build -trimpath` 产物文件版本 0.2.2.0、go1.27.3,`govulncheck -mode=binary` 无漏洞。
+
+### 实机验证(临时 USERPROFILE,隔离数据目录)
+- 隐藏启动 0.9~1.4 秒内托盘就绪;主窗口在整个启动过程中**一次都不可见**(5 ms 轮询 3 秒,可见样本 0),位置保持不动。
+- 前台窗口全程是原窗口(pid 未变),ClipBox 从未取得前台;日志无 `CopyAndPaste`。另建一个"同类名同标题"的隐藏窗口(另一个进程)干扰,应用仍能找回自己的窗口。
+- 托盘"显示"路径:6 ms 内窗口可见,出现在光标附近、工作区内。
+- Run 值从已删除的 `verify-exe.exe` 自动改指 `%LOCALAPPDATA%\Programs\ClipBox\ClipBox.exe --hidden`(本机日常版已部署到这里);本轮测试前后 Run 值不变。
+- 存量热键 Ctrl+1:启动时弹「唤起热键已改回默认」,DB 改为 modifiers=3、key=86,Ctrl+Alt+V 被注册,Ctrl+1 未被占用。
+- 单实例:第二个进程 0.10 秒退出,原实例弹出窗口。
+- 设置页在 WebView2 + Wails v2.17.1 下渲染正常,绑定(存储统计)和托盘事件(打开设置)可用。
+
+### 待手动验收
+- [ ] 真实键盘按 Ctrl+Alt+V 唤起、回车粘贴到记事本/Chrome/VS Code。注入的按键在本机被丢弃(自己注册的 Ctrl+Alt+Shift+F12 也收不到 WM_HOTKEY),推断是游戏反作弊的键盘钩子,未能自动测。
+- [ ] 下次登录自动启动;首次启动弹一次热键改回提示。

@@ -1,6 +1,7 @@
 package windowutil
 
 import (
+	"os"
 	"syscall"
 	"unsafe"
 )
@@ -9,13 +10,18 @@ var (
 	procMonitorFromPoint = user32.NewProc("MonitorFromPoint")
 	procGetMonitorInfo   = user32.NewProc("GetMonitorInfoW")
 	procGetWindowRect    = user32.NewProc("GetWindowRect")
-	procFindWindowW      = user32.NewProc("FindWindowW")
+	procFindWindowExW    = user32.NewProc("FindWindowExW")
+	procSetWindowPos     = user32.NewProc("SetWindowPos")
 )
 
 const (
 	monitorDefaultToNearest = 0x00000002
 	// safeInset 让窗口离工作区边缘留一点空隙，避免贴边。
 	safeInset int32 = 8
+
+	swpNoSize     = 0x0001
+	swpNoZOrder   = 0x0004
+	swpNoActivate = 0x0010
 )
 
 // WorkArea 是显示器工作区（排除任务栏），使用屏幕物理像素坐标。
@@ -79,17 +85,49 @@ func WindowSize(hwnd uintptr) (int32, int32, bool) {
 	return w, h, true
 }
 
-// FindWindowByTitle 按标题查找顶层窗口（找不到返回 0）。
-func FindWindowByTitle(title string) uintptr {
-	if title == "" {
+// FindOwnWindow 返回本进程中窗口类为 className、标题为 title 的顶层窗口（找不到返回 0）。
+// 只按标题找会命中别的进程的同名窗口，例如资源管理器打开了名为 ClipBox 的文件夹；
+// 不比对窗口类会命中本进程里标题相同的对话框。
+func FindOwnWindow(className, title string) uintptr {
+	if className == "" || title == "" {
 		return 0
 	}
-	ptr, err := syscall.UTF16PtrFromString(title)
+	classPtr, err := syscall.UTF16PtrFromString(className)
 	if err != nil {
 		return 0
 	}
-	hwnd, _, _ := procFindWindowW.Call(0, uintptr(unsafe.Pointer(ptr)))
-	return hwnd
+	titlePtr, err := syscall.UTF16PtrFromString(title)
+	if err != nil {
+		return 0
+	}
+	self := uint32(os.Getpid())
+	var hwnd uintptr
+	for {
+		hwnd, _, _ = procFindWindowExW.Call(0, hwnd, uintptr(unsafe.Pointer(classPtr)), uintptr(unsafe.Pointer(titlePtr)))
+		if hwnd == 0 {
+			return 0
+		}
+		var pid uint32
+		procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		if pid == self {
+			return hwnd
+		}
+	}
+}
+
+// MoveWindow 把窗口左上角移到屏幕坐标 (x, y)（物理像素），不改尺寸和 Z 序，不激活。
+// Wails 的 runtime.WindowSetPosition 把坐标当作相对窗口当前所在显示器工作区的偏移，
+// 传绝对坐标时，任务栏在顶部/左侧或窗口在副屏上，会多挪出一个工作区原点。
+func MoveWindow(hwnd uintptr, x, y int32) bool {
+	return setWindowPos(hwnd, x, y, swpNoSize|swpNoZOrder|swpNoActivate)
+}
+
+func setWindowPos(hwnd uintptr, x, y int32, flags uintptr) bool {
+	if hwnd == 0 {
+		return false
+	}
+	ok, _, _ := procSetWindowPos.Call(hwnd, 0, uintptr(x), uintptr(y), 0, 0, flags)
+	return ok != 0
 }
 
 // PlaceNearCursor 计算窗口左上角坐标：放在光标右下方 offset 处，
