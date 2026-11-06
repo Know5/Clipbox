@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,13 @@ type ClipExportResult struct {
 type ClipTag struct {
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+}
+
+type ClipImageMeta struct {
+	ID     int64 `json:"id"`
+	Width  int   `json:"width"`
+	Height int   `json:"height"`
+	Bytes  int64 `json:"bytes"`
 }
 
 func hotkeyDisplayName(modifiers, keyCode int) string {
@@ -274,6 +282,67 @@ func (a *App) GetImageDataURL(id int64) (string, error) {
 
 	// Fallback: old entries stored as base64-encoded BMP data in the DB.
 	return "data:image/bmp;base64," + entry.Content, nil
+}
+
+// GetSystemAccentColor returns the DWM accent colour as "#RRGGBB", or "" when
+// the registry value is absent or unreadable.
+func (a *App) GetSystemAccentColor() (string, error) {
+	value, ok := windowutil.SystemAccentColor()
+	if !ok {
+		return "", nil
+	}
+	return windowutil.AccentColorHex(value), nil
+}
+
+// GetClipImageMeta returns dimensions and file size for the requested image
+// clips. Missing ids, non-image clips, legacy base64 entries, and unreadable
+// files are omitted.
+func (a *App) GetClipImageMeta(ids []int64) ([]ClipImageMeta, error) {
+	metas := make([]ClipImageMeta, 0, len(ids))
+	for _, id := range ids {
+		entry, err := a.store.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+		if entry == nil || entry.Type != "image" {
+			continue
+		}
+		meta, ok := readClipImageMeta(entry.Content)
+		if !ok {
+			continue
+		}
+		meta.ID = id
+		metas = append(metas, meta)
+	}
+	return metas, nil
+}
+
+// readClipImageMeta reads a DIB file's BITMAPINFOHEADER for its dimensions and
+// stats the file for its size. Content that is not an existing file (legacy
+// base64 entries) is rejected.
+func readClipImageMeta(content string) (ClipImageMeta, bool) {
+	if content == "" {
+		return ClipImageMeta{}, false
+	}
+	info, err := os.Stat(content)
+	if err != nil || info.IsDir() {
+		return ClipImageMeta{}, false
+	}
+	file, err := os.Open(content)
+	if err != nil {
+		return ClipImageMeta{}, false
+	}
+	defer file.Close()
+
+	var header [12]byte
+	if _, err := io.ReadFull(file, header[:]); err != nil {
+		return ClipImageMeta{}, false
+	}
+	width, height, ok := clipboard.DibDimensions(header[:])
+	if !ok {
+		return ClipImageMeta{}, false
+	}
+	return ClipImageMeta{Width: width, Height: height, Bytes: info.Size()}, true
 }
 
 func (a *App) ExportClip(id int64) (ClipExportResult, error) {

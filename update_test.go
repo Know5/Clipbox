@@ -71,13 +71,13 @@ func TestCheckForUpdatesFindsNewVersion(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"app":"ClipBox",
-			"version":"0.3.0",
+			"version":"9.9.9",
 			"platform":"windows",
 			"arch":"amd64",
 			"builtAtUtc":"2026-06-09T10:00:00Z",
-			"downloadUrl":"https://example.com/ClipBox-0.3.0-windows-amd64.zip",
+			"downloadUrl":"https://example.com/ClipBox-9.9.9-windows-amd64.zip",
 			"packageSha256":"abc123",
-			"releaseNotesUrl":"https://example.com/releases/0.3.0",
+			"releaseNotesUrl":"https://example.com/releases/9.9.9",
 			"files":[{"path":"ClipBox.exe","bytes":123,"sha256":"exe123"}]
 		}`))
 	}))
@@ -92,8 +92,8 @@ func TestCheckForUpdatesFindsNewVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckForUpdates() error = %v", err)
 	}
-	if !result.UpdateAvailable || result.LatestVersion != "0.3.0" {
-		t.Fatalf("update result = %+v, want update to 0.3.0", result)
+	if !result.UpdateAvailable || result.LatestVersion != "9.9.9" {
+		t.Fatalf("update result = %+v, want update to 9.9.9", result)
 	}
 	if result.DownloadURL == "" || result.ReleaseNotesURL == "" || result.SHA256 != "abc123" {
 		t.Fatalf("update metadata = %+v, want URLs and checksum", result)

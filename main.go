@@ -82,7 +82,8 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 255},
+		// 与 App.css 的 --bg-primary 一致；前端切主题时再调 WindowSetBackgroundColour。
+		BackgroundColour: &options.RGBA{R: 32, G: 32, B: 32, A: 255},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		StartHidden:      startHidden,

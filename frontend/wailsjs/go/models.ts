@@ -127,6 +127,24 @@ export namespace main {
 	        this.cancelled = source["cancelled"];
 	    }
 	}
+	export class ClipImageMeta {
+	    id: number;
+	    width: number;
+	    height: number;
+	    bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ClipImageMeta(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.bytes = source["bytes"];
+	    }
+	}
 	export class ClipPage {
 	    items: clipboard.ClipEntry[];
 	    total: number;

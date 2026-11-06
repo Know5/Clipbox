@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, memo } from "react";
-import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, CopyAndPaste, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, UpdateClipMetadata, ExportClip, ReadClipboardText } from "../wailsjs/go/main/App";
-import { EventsOn, WindowMinimise } from "../wailsjs/runtime/runtime";
+import { GetClipPageByTypeAndTag, SearchClipPageByTypeAndTag, GetClipTags, CopyToClipboard, CopyAndPaste, TogglePin, DeleteClip, ClearAll, GetHotkeySettings, GetAppSettings, HideWindow, ToggleWindowPin, GetWindowPinned, GetImageDataURL, GetClipDetails, GetClipImageMeta, UpdateClipMetadata, ExportClip, ReadClipboardText, GetSourceIcon } from "../wailsjs/go/main/App";
+import { EventsOn } from "../wailsjs/runtime/runtime";
 import Settings from "./Settings";
+import { refreshAccent, syncWindowBackground } from "./theme";
 import "./App.css";
 
 interface ClipEntry {
@@ -257,58 +258,123 @@ function mergeClips(existing: ClipEntry[], incoming: ClipEntry[]) {
   return sortClips(Array.from(byId.values()));
 }
 
-/** Click-to-load image: never auto-loads. User clicks placeholder to view,
- *  clicks again on the loaded image to unload it (free ~10+ MB browser memory). */
-function ClickToLoadImage({ clipId, thumbnail }: { clipId: number; thumbnail?: string }) {  const [dataUrl, setDataUrl] = useState("");
-  const [loading, setLoading] = useState(false);
+interface ClipImageMeta {
+  id: number;
+  width: number;
+  height: number;
+  bytes: number;
+}
 
-  const handleToggle = async (e: React.MouseEvent) => {
-    e.stopPropagation(); // Don't trigger the parent clip-item's copy action.
-    if (dataUrl) {
-      // Unload the image to free browser memory.
-      setDataUrl("");
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Bold the search terms in a preview line (spec 4.4). */
+function Highlight({ text, query }: { text: string; query: string }) {
+  const terms = query.trim().split(/\s+/).filter(Boolean).map(escapeRegExp);
+  if (terms.length === 0) return <>{text}</>;
+  const parts = text.split(new RegExp(`(${terms.join("|")})`, "gi"));
+  return (
+    <>
+      {parts.map((part, index) => (index % 2 === 1 ? <strong className="hl" key={index}>{part}</strong> : part))}
+    </>
+  );
+}
+
+/** 来源应用图标：按 exe 路径缓存，取不到就退回按类型画的图标。 */
+const sourceIconCache = new Map<string, string>();
+const sourceIconPending = new Map<string, Promise<string>>();
+
+function loadSourceIcon(path: string): Promise<string> {
+  const cached = sourceIconCache.get(path);
+  if (cached !== undefined) return Promise.resolve(cached);
+  const pending = sourceIconPending.get(path);
+  if (pending) return pending;
+  const request = GetSourceIcon(path)
+    .then((url) => {
+      const value = url || "";
+      sourceIconCache.set(path, value);
+      return value;
+    })
+    .catch(() => {
+      sourceIconCache.set(path, "");
+      return "";
+    })
+    .finally(() => sourceIconPending.delete(path));
+  sourceIconPending.set(path, request);
+  return request;
+}
+
+function TypeIcon({ type }: { type: string }) {
+  if (type === "image") {
+    return (
+      <svg className="clip-type" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <rect x="2" y="2.5" width="12" height="11" rx="1.5" />
+        <circle cx="5.6" cy="6" r="1" />
+        <path d="M3 12l3.2-3.4 2.4 2.2L11 8l2.2 4" />
+      </svg>
+    );
+  }
+  return (
+    <svg className="clip-type" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+      <path d="M3 2.5h6.5L13 6v7.5H3z" />
+      <path d="M9.2 2.7V6h3.6" />
+      <path d="M5 8.5h6M5 11h4.5" />
+    </svg>
+  );
+}
+
+function SourceIcon({ path, type }: { path?: string; type: string }) {
+  const [src, setSrc] = useState(() => (path ? sourceIconCache.get(path) || "" : ""));
+  useEffect(() => {
+    if (!path) {
+      setSrc("");
       return;
     }
-    setLoading(true);
-    try {
-      const url = await GetImageDataURL(clipId);
-      setDataUrl(url || "");
-    } catch {
-      setDataUrl("");
-    } finally {
-      setLoading(false);
+    const cached = sourceIconCache.get(path);
+    if (cached !== undefined) {
+      setSrc(cached);
+      return;
     }
-  };
+    let active = true;
+    loadSourceIcon(path).then((url) => {
+      if (active) setSrc(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [path]);
+  if (!src) return <TypeIcon type={type} />;
+  return <img className="clip-source-icon" src={src} alt="" />;
+}
 
+function PinIcon({ className }: { className?: string }) {
   return (
-    <div className="clip-img-container" onClick={handleToggle}>
-      {dataUrl ? (
-        <>
-          <img src={dataUrl} className="clip-img" alt="clip-img" />
-          <span className="img-unload-hint">点击收起图片</span>
-        </>
-      ) : (
-        thumbnail ? (
-          <div className="clip-thumbnail-preview">
-            <img src={thumbnail} className="clip-img thumbnail" alt="clip-thumbnail" />
-            <span className="img-unload-hint">{loading ? "加载中..." : "点击查看原图"}</span>
-          </div>
-        ) : (
-          <div className="clip-img-placeholder clickable">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
-            </svg>
-            <span>{loading ? "加载中..." : "点击查看图片"}</span>
-          </div>
-        )
-      )}
-    </div>
+    <svg className={className} width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M15.6 3H8.4v2.1l1.1.9v4.5L7 13.1V15h4.6v6h.8v-6H17v-1.9l-2.5-2.6V6l1.1-.9z" />
+    </svg>
   );
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatImageMeta(meta?: ClipImageMeta) {
+  if (!meta) return "";
+  const size = meta.width && meta.height ? `${meta.width}×${meta.height}` : "";
+  return [size, formatBytes(meta.bytes)].filter(Boolean).join(" · ");
 }
 
 interface ClipItemProps {
   clip: ClipEntry;
+  index: number;
+  query: string;
   timeLabel: string;
+  imageLabel?: string;
   selected: boolean;
   copyStatus: CopyFeedback | null;
   deleteConfirming: boolean;
@@ -320,11 +386,13 @@ interface ClipItemProps {
   onDetail: (id: number) => void;
 }
 
-/** 列表项。memo 化后，悬停/选中/反馈只会重渲染受影响的少数几项，
- *  而不是整个列表（长列表滑动卡顿的主要来源）。 */
+/** 单行列表项。memo 化后，悬停/选中/反馈只重渲染受影响的行，而不是整个列表。 */
 const ClipItem = memo(function ClipItem({
   clip,
+  index,
+  query,
   timeLabel,
+  imageLabel,
   selected,
   copyStatus,
   deleteConfirming,
@@ -335,79 +403,65 @@ const ClipItem = memo(function ClipItem({
   onDelete,
   onDetail,
 }: ClipItemProps) {
-  // 使用者需求:单击 = 复制并粘贴回原输入框(窗口自动隐藏)。Alt+单击 同样粘贴。
-  // 拖选文字时浏览器仍会触发 click,此处用选区判断排除,避免误粘贴。
+  // 单击 = 复制并粘贴回原输入框（与回车一致）。拖选文字时不触发。
   const handleClick = () => {
     const selection = window.getSelection();
     if (selection && selection.toString().length > 0) return;
     onDouble(clip.id);
   };
 
-  const sourceLabel = clipSourceLabel(clip);
+  const status = copyStatus ? copyStatus.message : deleteConfirming || deleting ? (deleting ? "删除中…" : "再点删除") : "";
+  const previewText = clip.type === "image" ? imageLabel || "图片" : clip.preview;
+
   return (
     <div
       data-clip-id={clip.id}
       role="option"
       aria-selected={selected}
-      className={`clip-item ${clip.pinned ? "pinned" : ""} ${selected ? "selected" : ""} ${copyStatus ? (copyStatus.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
+      className={`clip-item ${clip.type === "image" ? "tall" : ""} ${clip.pinned ? "pinned" : ""} ${selected ? "selected" : ""} ${copyStatus ? (copyStatus.error ? "copy-error" : "copied") : ""} ${deleteConfirming ? "delete-confirming" : ""}`}
+      title={clipSourceTitle(clip)}
       onMouseEnter={() => onHover(clip.id)}
       onClick={handleClick}
     >
-      <div className="clip-head">
-        <span className={`dot ${clip.type}`} />
-        <div className="clip-meta">
-          <span className="clip-time">{timeLabel}</span>
-          {sourceLabel && <span className="clip-source" title={clipSourceTitle(clip)}>{sourceLabel}</span>}
-          {clip.tags && <span className="clip-tags" title={clip.tags}>{clip.tags}</span>}
-        </div>
-        {copyStatus && (
-          <span className={`clip-copy-status ${copyStatus.error ? "error" : ""}`}>
-            {copyStatus.message}
-          </span>
-        )}
-        {(deleteConfirming || deleting) && (
-          <span className="clip-delete-status">
-            {deleting ? "删除中..." : "再点删除"}
-          </span>
-        )}
-        <div className="clip-actions">
-          <button
-            className="act"
-            onClick={(e) => { e.stopPropagation(); onDetail(clip.id); }}
-            title="查看详情"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-            </svg>
-          </button>
-          <button
-            className={`act ${clip.pinned ? "on" : ""}`}
-            onClick={(e) => { e.stopPropagation(); onPin(clip.id); }}
-            title={clip.pinned ? "取消置顶" : "置顶"}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill={clip.pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
-            </svg>
-          </button>
-          <button
-            className={`act danger ${deleteConfirming ? "confirming" : ""}`}
-            onClick={(e) => { e.stopPropagation(); onDelete(clip.id); }}
-            disabled={deleting}
-            title={deleteConfirming ? "再次点击删除" : "删除"}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div className="clip-body">
-        {clip.type === "text" ? (
-          <span className="clip-text">{clip.preview}</span>
-        ) : (
-          <ClickToLoadImage clipId={clip.id} thumbnail={clip.thumbnail} />
-        )}
+      <span className="clip-index">{index < 9 ? index + 1 : ""}</span>
+      {clip.type === "image" && clip.thumbnail ? (
+        <img className="clip-thumb" src={clip.thumbnail} alt="" />
+      ) : (
+        <SourceIcon path={clip.sourcePath} type={clip.type} />
+      )}
+      <span className="clip-preview">
+        <Highlight text={previewText} query={query} />
+      </span>
+      {clip.pinned && <PinIcon className="clip-pin" />}
+      <span className={`clip-meta ${copyStatus?.error || deleteConfirming ? "error" : ""}`}>{status || timeLabel}</span>
+      <div className="clip-actions">
+        <button
+          className="act"
+          onClick={(e) => { e.stopPropagation(); onDetail(clip.id); }}
+          title="查看详情 (Space)"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+          </svg>
+        </button>
+        <button
+          className={`act ${clip.pinned ? "on" : ""}`}
+          onClick={(e) => { e.stopPropagation(); onPin(clip.id); }}
+          title={clip.pinned ? "取消置顶 (P)" : "置顶 (P)"}
+        >
+          <PinIcon />
+        </button>
+        <button
+          className={`act danger ${deleteConfirming ? "confirming" : ""}`}
+          onClick={(e) => { e.stopPropagation(); onDelete(clip.id); }}
+          disabled={deleting}
+          title={deleteConfirming ? "再次点击删除" : "删除 (Del)"}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+          </svg>
+        </button>
       </div>
     </div>
   );
@@ -420,6 +474,9 @@ function App() {
   const [selectedTag, setSelectedTag] = useState("");
   const [tagOptions, setTagOptions] = useState<ClipTag[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [openPanel, setOpenPanel] = useState<null | "tags" | "help" | "more">(null);
+  const [imageMeta, setImageMeta] = useState<Record<number, ClipImageMeta>>({});
+  const requestedImageMeta = useRef<Set<number>>(new Set());
   const [hotkeyDisplay, setHotkeyDisplay] = useState("Ctrl + Alt + V");
   const [windowPinned, setWindowPinned] = useState(false);
   const [totalClips, setTotalClips] = useState(0);
@@ -592,6 +649,7 @@ function App() {
     });
     const unsub2 = EventsOn("window:shown", () => {
       setTimeout(() => searchRef.current?.focus(), 100);
+      refreshAccent().catch(console.error);
       // 每次重新打开都回到最新一页，避免滚到底后加载的分页"常驻"成 100/500、200/500。
       if (clipsRef.current.length > PAGE_SIZE) {
         setClips((prev) => prev.slice(0, PAGE_SIZE));
@@ -632,6 +690,45 @@ function App() {
     GetWindowPinned().then(setWindowPinned).catch(console.error);
   }, []);
 
+  const togglePanel = useCallback((panel: "tags" | "help" | "more") => {
+    setOpenPanel((current) => (current === panel ? null : panel));
+  }, []);
+
+  // 点面板外、窗口失焦、按 Esc 都关掉面板（面板自身的 mousedown 已 stopPropagation）。
+  useEffect(() => {
+    if (!openPanel) return;
+    const close = () => setOpenPanel(null);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [openPanel]);
+
+  // 图片行的尺寸和文件大小：按需批量取，取到后记住；失败的 id 不再重试，避免刷请求。
+  useEffect(() => {
+    const missing = clips
+      .filter((clip) => clip.type === "image" && !imageMeta[clip.id] && !requestedImageMeta.current.has(clip.id))
+      .map((clip) => clip.id);
+    if (missing.length === 0) return;
+    missing.forEach((id) => requestedImageMeta.current.add(id));
+    let active = true;
+    GetClipImageMeta(missing)
+      .then((items) => {
+        if (!active || !items || items.length === 0) return;
+        setImageMeta((prev) => {
+          const next = { ...prev };
+          for (const item of items) next[item.id] = item;
+          return next;
+        });
+      })
+      .catch(console.error);
+    return () => {
+      active = false;
+    };
+  }, [clips, imageMeta]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setTimeTick((tick) => tick + 1), 60_000);
     return () => window.clearInterval(timer);
@@ -644,6 +741,8 @@ function App() {
     const apply = () => {
       const resolved = mode === "light" || (mode === "system" && media.matches) ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", resolved);
+      syncWindowBackground();
+      refreshAccent().catch(console.error);
     };
     GetAppSettings()
       .then((settings) => {
@@ -919,6 +1018,10 @@ function App() {
     const down = (e: KeyboardEvent) => {
       if (e.isComposing) return;
       if (e.key === "Escape") {
+        if (openPanel) {
+          setOpenPanel(null);
+          return;
+        }
         if (detailOpen) {
           closeDetail();
           return;
@@ -1038,7 +1141,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", down);
     };
-  }, [closeDetail, detailOpen, filtered, handleCopy, handleDoubleClick, handleOpenDetail, handlePin, hasMore, listLoading, loadClipPage, loadingMore, requestDelete, search, selectedClip, selectedIndex, showSettings]);
+  }, [closeDetail, detailOpen, filtered, handleCopy, handleDoubleClick, handleOpenDetail, handlePin, hasMore, listLoading, loadClipPage, loadingMore, openPanel, requestDelete, search, selectedClip, selectedIndex, showSettings]);
 
   const emptyTitle = search.trim() ? "没有匹配记录" : "暂无剪贴板记录";
   const emptyHint = search.trim()
@@ -1052,207 +1155,272 @@ function App() {
 
   return (
     <div className="app">
-      <div className="title-bar">
-        <span className="title-text">ClipBox</span>
-        <div className="title-actions">
-          <button className="title-btn" onClick={() => WindowMinimise()} title="最小化" aria-label="最小化">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-              <line x1="2" y1="6" x2="10" y2="6" />
-            </svg>
-          </button>
-          <button className="title-btn close" onClick={() => HideWindow()} title="关闭" aria-label="关闭">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round">
-              <line x1="3" y1="3" x2="9" y2="9" />
-              <line x1="9" y1="3" x2="3" y2="9" />
-            </svg>
-          </button>
-          <button className="settings-btn" onClick={() => setShowSettings(true)} title="设置">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </svg>
-          </button>
+      <header className="app-header">
+        {showSettings ? (
+          <span className="header-drag" />
+        ) : (
+        <div className="search-field">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="11" cy="11" r="7.5" /><line x1="21" y1="21" x2="16.5" y2="16.5" />
+          </svg>
+          <input
+            ref={searchRef}
+            type="text"
+            className="search"
+            placeholder="搜索剪贴板历史…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onContextMenu={openSearchMenu}
+          />
         </div>
-      </div>
+        )}
+        {!showSettings && (
+          <>
+        <button
+          className={`header-btn ${windowPinned ? "on" : ""}`}
+          onClick={handleToggleWindowPin}
+          title={windowPinned ? "已固定窗口 — 点击取消" : "固定窗口（复制后不隐藏）"}
+          aria-label="固定窗口"
+        >
+          <PinIcon />
+        </button>
+        <button
+          className={`header-btn ${openPanel === "help" ? "on" : ""}`}
+          onClick={() => togglePanel("help")}
+          title="快捷键与用法"
+          aria-label="快捷键"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M9.6 9.2a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1.1.9-1.1 1.8" />
+            <circle cx="12" cy="17" r="0.7" fill="currentColor" />
+          </svg>
+        </button>
+        <button className="header-btn" onClick={() => setShowSettings(true)} title="设置" aria-label="设置">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+          </>
+        )}
+        <button className="header-btn danger" onClick={() => HideWindow()} title="关闭 (Esc)" aria-label="关闭">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+            <line x1="3" y1="3" x2="9" y2="9" /><line x1="9" y1="3" x2="3" y2="9" />
+          </svg>
+        </button>
+      </header>
 
       {showSettings ? (
         <Settings onBack={() => setShowSettings(false)} />
       ) : (
-      <>
-      <div className="search-bar">
-        <svg className="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input
-          ref={searchRef}
-          type="text"
-          className="search"
-          placeholder="搜索剪贴板历史..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          onContextMenu={openSearchMenu}
-        />
-      </div>
-
-      <div className="filter-row">
-        <button className={`chip ${filter === "all" ? "active" : ""}`} onClick={() => setFilter("all")}>全部</button>
-        <button className={`chip ${filter === "text" ? "active" : ""}`} onClick={() => setFilter("text")}>文本</button>
-        <button className={`chip ${filter === "image" ? "active" : ""}`} onClick={() => setFilter("image")}>图片</button>
-        <span className="spacer" />
-        {copyFeedback.message && <span className={`copy-feedback ${copyFeedback.error ? "error" : ""}`} title={copyFeedback.message}>{copyFeedback.message}</span>}
-        {clearMessage && <span className="clear-feedback" title={clearMessage}>{clearMessage}</span>}
-        <button
-          className={`chip danger ${clearConfirming ? "confirming" : ""}`}
-          onClick={handleClear}
-          disabled={clearing}
-          title={clearConfirming ? "再次点击清空未置顶记录" : "清空未置顶记录"}
-        >
-          {clearing ? "清空中..." : clearConfirming ? "确认清空" : "清空"}
-        </button>
-      </div>
-      {(visibleTags.length > 0 || selectedTag) && (
-        <div
-          className="tag-row"
-          onWheel={(e) => {
-            // 标签溢出时支持鼠标滚轮横向滚动
-            if (e.deltaY !== 0) e.currentTarget.scrollLeft += e.deltaY;
-          }}
-        >
-          <button className={`tag-chip ${selectedTag === "" ? "active" : ""}`} onClick={() => setSelectedTag("")}>全部标签</button>
-          {visibleTags.map((tag) => (
-            <button
-              key={tag.name}
-              className={`tag-chip ${selectedTag === tag.name ? "active" : ""}`}
-              onClick={() => setSelectedTag((current) => current === tag.name ? "" : tag.name)}
-              title={tag.count ? `${tag.name} (${tag.count})` : tag.name}
-            >
-              <span>{tag.name}</span>
-              {tag.count > 0 && <strong>{tag.count}</strong>}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="clip-list" ref={listRef} role="listbox" aria-label="剪贴板历史列表" onContextMenu={openItemMenu} onScroll={handleListScroll}>
-        {listError && <div className="list-error" role="alert">{listError}</div>}
-        {listLoading && clips.length === 0 && (
-          <div className="empty">
-            <span>加载中...</span>
-          </div>
-        )}
-        {!listLoading && filtered.length === 0 && (
-          <div className="empty">
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-            </svg>
-            <span>{emptyTitle}</span>
-            <span className="empty-hint">{emptyHint}</span>
-            {!search.trim() && filter === "all" && (
-              <span className="empty-hint">按 <kbd>{hotkeyDisplay}</kbd> 随时唤起 ClipBox</span>
-            )}
-          </div>
-        )}
-        {filtered.map((clip) => (
-          <ClipItem
-            key={clip.id}
-            clip={clip}
-            timeLabel={formatTime(clip.timestamp)}
-            selected={clip.id === selectedClipId}
-            copyStatus={copyFeedback.clipId === clip.id ? copyFeedback : null}
-            deleteConfirming={deleteConfirmId === clip.id}
-            deleting={deleteDeletingId === clip.id}
-            onHover={handleHover}
-            onPin={handlePin}
-            onDelete={requestDelete}
-            onDouble={handleDoubleClick}
-            onDetail={handleOpenDetail}
-          />
-        ))}
-        {clips.length > 0 && (
-          <div className="list-status">
-            <span>已加载 {clips.length} / {totalClips}</span>
-            {hasMore && (
-              <button className="load-more-btn" onClick={handleLoadMore} disabled={loadingMore || listLoading}>
-                {loadingMore ? "加载中..." : "加载更多"}
+        <>
+          <div className="toolbar-area" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="toolbar">
+              <div className="segmented" role="tablist" aria-label="类型筛选">
+                {([["all", "全部"], ["text", "文本"], ["image", "图片"]] as [ClipFilter, string][]).map(([value, label]) => (
+                  <button
+                    key={value}
+                    role="tab"
+                    aria-selected={filter === value}
+                    className={`seg ${filter === value ? "active" : ""}`}
+                    onClick={() => setFilter(value)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <button
+                className={`toolbar-btn ${selectedTag ? "on" : ""}`}
+                onClick={() => togglePanel("tags")}
+                title="按标签筛选"
+              >
+                {selectedTag || "标签"}
+                <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                  <path d="M3 4.5l3 3 3-3" />
+                </svg>
               </button>
+              <span className="toolbar-spacer" />
+              {(copyFeedback.message || clearMessage) && (
+                <span className={`toolbar-feedback ${copyFeedback.error ? "error" : ""}`} title={copyFeedback.message || clearMessage}>
+                  {copyFeedback.message || clearMessage}
+                </span>
+              )}
+              <button
+                className={`toolbar-btn ${openPanel === "more" ? "on" : ""}`}
+                onClick={() => togglePanel("more")}
+                title="更多"
+                aria-label="更多"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                  <circle cx="3" cy="8" r="1.4" /><circle cx="8" cy="8" r="1.4" /><circle cx="13" cy="8" r="1.4" />
+                </svg>
+              </button>
+            </div>
+
+            {openPanel === "tags" && (
+              <div className="popover" role="dialog" aria-label="标签筛选">
+                <div className="popover-title">
+                  <span>按标签筛选</span>
+                  {selectedTag && (
+                    <button className="toolbar-btn" onClick={() => { setSelectedTag(""); setOpenPanel(null); }}>清除</button>
+                  )}
+                </div>
+                {visibleTags.length === 0 ? (
+                  <div className="empty-hint">还没有标签，详情里可以给记录加标签</div>
+                ) : (
+                  <div className="tag-chips">
+                    <button
+                      className={`tag-chip ${selectedTag === "" ? "active" : ""}`}
+                      onClick={() => { setSelectedTag(""); setOpenPanel(null); }}
+                    >
+                      全部标签
+                    </button>
+                    {visibleTags.map((tag) => (
+                      <button
+                        key={tag.name}
+                        className={`tag-chip ${selectedTag === tag.name ? "active" : ""}`}
+                        onClick={() => { setSelectedTag((current) => current === tag.name ? "" : tag.name); setOpenPanel(null); }}
+                        title={tag.count ? `${tag.name} (${tag.count})` : tag.name}
+                      >
+                        <span>{tag.name}</span>
+                        {tag.count > 0 && <strong>{tag.count}</strong>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {openPanel === "help" && (
+              <div className="popover" role="dialog" aria-label="快捷键">
+                <div className="popover-title">
+                  <span>快捷键</span>
+                  <button className="toolbar-btn" onClick={() => setOpenPanel(null)}>关闭</button>
+                </div>
+                <div className="help-grid">
+                  <span><kbd>{hotkeyDisplay}</kbd></span><span>唤起 / 隐藏 ClipBox</span>
+                  <span><kbd>↑</kbd><kbd>↓</kbd></span><span>选择条目，<kbd>Home</kbd> 回到最新</span>
+                  <span><kbd>Enter</kbd></span><span>复制并粘贴回原窗口</span>
+                  <span><kbd>Ctrl</kbd><kbd>Enter</kbd></span><span>只复制</span>
+                  <span><kbd>Ctrl</kbd><kbd>1</kbd>–<kbd>9</kbd></span><span>复制第 n 条</span>
+                  <span><kbd>Alt</kbd><kbd>1</kbd>–<kbd>9</kbd></span><span>复制并粘贴第 n 条</span>
+                  <span><kbd>Space</kbd></span><span>详情、备注与标签</span>
+                  <span><kbd>P</kbd></span><span>置顶 / 取消置顶</span>
+                  <span><kbd>Del</kbd></span><span>删除（再按一次确认）</span>
+                  <span><kbd>Esc</kbd></span><span>关闭</span>
+                </div>
+              </div>
+            )}
+
+            {openPanel === "more" && (
+              <div className="popover" role="dialog" aria-label="更多操作">
+                <div className="menu-list">
+                  <button
+                    className={`menu-item danger ${clearConfirming ? "confirming" : ""}`}
+                    onClick={handleClear}
+                    disabled={clearing}
+                  >
+                    {clearing ? "清空中…" : clearConfirming ? "再次点击确认清空" : "清空未置顶记录"}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
-        )}
-      </div>
-      {showBackToTop && (
-        <button className="back-to-top" onClick={backToTop} title="回到最新（快捷键 Home）">
-          ↑ 最新
-        </button>
-      )}
-      {ctxMenu && (
-        <div
-          className="ctx-menu"
-          style={{
-            left: Math.min(ctxMenu.x, window.innerWidth - 170),
-            top: Math.min(ctxMenu.y, window.innerHeight - 230),
-          }}
-          onMouseDown={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.preventDefault()}
-        >
-          {ctxMenu.kind === "search" ? (
-            <>
-              <button className="ctx-item" onClick={handlePasteSearch}>粘贴</button>
-              <button className="ctx-item" onClick={() => { searchRef.current?.select(); setCtxMenu(null); }}>全选</button>
-              <button className="ctx-item" onClick={() => { setSearch(""); searchRef.current?.focus(); setCtxMenu(null); }}>清空搜索</button>
-            </>
-          ) : (
-            <>
-              <button className="ctx-item" onClick={() => { handleCopy(ctxMenu.clipId); setCtxMenu(null); }}>复制</button>
-              <button className="ctx-item" onClick={() => { handleDoubleClick(ctxMenu.clipId); setCtxMenu(null); }}>复制并粘贴</button>
-              <button className="ctx-item" onClick={() => { handlePin(ctxMenu.clipId); setCtxMenu(null); }}>置顶 / 取消置顶</button>
-              <button className="ctx-item" onClick={() => { handleOpenDetail(ctxMenu.clipId).catch(console.error); setCtxMenu(null); }}>详情</button>
-              <button className="ctx-item danger" onClick={() => { requestDelete(ctxMenu.clipId); setCtxMenu(null); }}>删除</button>
-            </>
-          )}
-        </div>
-      )}
-      {detailOpen && (
-        <ClipDetailPanel
-          clip={detailClip}
-          imageUrl={detailImageUrl}
-          imageLoading={detailImageLoading}
-          loading={detailLoading}
-          error={detailError}
-          onClose={closeDetail}
-          onCopy={handleCopy}
-          onSaveMetadata={handleSaveMetadata}
-          onExport={handleExportClip}
-        />
-      )}
 
-      <div className="footer">
-        <div className="kbd-group">
-          <kbd>↑↓</kbd> 选择
-        </div>
-        <div className="kbd-group">
-          <kbd>↵</kbd> 粘贴
-        </div>
-        <div className="kbd-group">
-          <kbd>Space</kbd> 详情
-        </div>
-        <div className="kbd-group">
-          <kbd>Del</kbd> 删除
-        </div>
-        <div className="kbd-group">
-          <kbd>Esc</kbd> 关闭
-        </div>
-        <button
-          className={`window-pin-btn ${windowPinned ? "pinned" : ""}`}
-          onClick={handleToggleWindowPin}
-          title={windowPinned ? "已固定 — 点击取消固定" : "未固定 — 点击固定窗口"}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill={windowPinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="12" y1="17" x2="12" y2="22"/>
-            <path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/>
-          </svg>
-        </button>
-      </div>
-      </>
+          <div className="clip-list" ref={listRef} role="listbox" aria-label="剪贴板历史列表" onContextMenu={openItemMenu} onScroll={handleListScroll}>
+            {listError && <div className="list-error" role="alert">{listError}</div>}
+            {listLoading && clips.length === 0 && (
+              <div className="empty">
+                <span>加载中…</span>
+              </div>
+            )}
+            {!listLoading && filtered.length === 0 && (
+              <div className="empty">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                </svg>
+                <span>{emptyTitle}</span>
+                <span className="empty-hint">{emptyHint}</span>
+                {!search.trim() && filter === "all" && (
+                  <span className="empty-hint">按 <kbd>{hotkeyDisplay}</kbd> 随时唤起，右上角 <kbd>?</kbd> 看全部快捷键</span>
+                )}
+              </div>
+            )}
+            {filtered.map((clip, index) => (
+              <ClipItem
+                key={clip.id}
+                clip={clip}
+                index={index}
+                query={search}
+                timeLabel={formatTime(clip.timestamp)}
+                imageLabel={clip.type === "image" ? formatImageMeta(imageMeta[clip.id]) : undefined}
+                selected={clip.id === selectedClipId}
+                copyStatus={copyFeedback.clipId === clip.id ? copyFeedback : null}
+                deleteConfirming={deleteConfirmId === clip.id}
+                deleting={deleteDeletingId === clip.id}
+                onHover={handleHover}
+                onPin={handlePin}
+                onDelete={requestDelete}
+                onDouble={handleDoubleClick}
+                onDetail={handleOpenDetail}
+              />
+            ))}
+            {clips.length > 0 && (
+              <div className="list-status">
+                <span>已加载 {clips.length} / {totalClips}</span>
+                {hasMore && (
+                  <button className="load-more-btn" onClick={handleLoadMore} disabled={loadingMore || listLoading}>
+                    {loadingMore ? "加载中…" : "加载更多"}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+          {showBackToTop && (
+            <button className="back-to-top" onClick={backToTop} title="回到最新（Home）">↑ 最新</button>
+          )}
+          {ctxMenu && (
+            <div
+              className="ctx-menu"
+              style={{
+                left: Math.min(ctxMenu.x, window.innerWidth - 170),
+                top: Math.min(ctxMenu.y, window.innerHeight - 230),
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onContextMenu={(e) => e.preventDefault()}
+            >
+              {ctxMenu.kind === "search" ? (
+                <>
+                  <button className="ctx-item" onClick={handlePasteSearch}>粘贴</button>
+                  <button className="ctx-item" onClick={() => { searchRef.current?.select(); setCtxMenu(null); }}>全选</button>
+                  <button className="ctx-item" onClick={() => { setSearch(""); searchRef.current?.focus(); setCtxMenu(null); }}>清空搜索</button>
+                </>
+              ) : (
+                <>
+                  <button className="ctx-item" onClick={() => { handleCopy(ctxMenu.clipId); setCtxMenu(null); }}>复制</button>
+                  <button className="ctx-item" onClick={() => { handleDoubleClick(ctxMenu.clipId); setCtxMenu(null); }}>复制并粘贴</button>
+                  <button className="ctx-item" onClick={() => { handlePin(ctxMenu.clipId); setCtxMenu(null); }}>置顶 / 取消置顶</button>
+                  <button className="ctx-item" onClick={() => { handleOpenDetail(ctxMenu.clipId).catch(console.error); setCtxMenu(null); }}>详情</button>
+                  <button className="ctx-item danger" onClick={() => { requestDelete(ctxMenu.clipId); setCtxMenu(null); }}>删除</button>
+                </>
+              )}
+            </div>
+          )}
+          {detailOpen && (
+            <ClipDetailPanel
+              clip={detailClip}
+              imageUrl={detailImageUrl}
+              imageLoading={detailImageLoading}
+              loading={detailLoading}
+              error={detailError}
+              onClose={closeDetail}
+              onCopy={handleCopy}
+              onSaveMetadata={handleSaveMetadata}
+              onExport={handleExportClip}
+            />
+          )}
+        </>
       )}
     </div>
   );

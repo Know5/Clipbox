@@ -50,6 +50,10 @@ export function GetClipDetails(arg1) {
   return window['go']['main']['App']['GetClipDetails'](arg1);
 }
 
+export function GetClipImageMeta(arg1) {
+  return window['go']['main']['App']['GetClipImageMeta'](arg1);
+}
+
 export function GetClipPage(arg1, arg2) {
   return window['go']['main']['App']['GetClipPage'](arg1, arg2);
 }
@@ -82,8 +86,16 @@ export function GetLastTargetInfo() {
   return window['go']['main']['App']['GetLastTargetInfo']();
 }
 
+export function GetSourceIcon(arg1) {
+  return window['go']['main']['App']['GetSourceIcon'](arg1);
+}
+
 export function GetStorageStats() {
   return window['go']['main']['App']['GetStorageStats']();
+}
+
+export function GetSystemAccentColor() {
+  return window['go']['main']['App']['GetSystemAccentColor']();
 }
 
 export function GetWindowPinned() {

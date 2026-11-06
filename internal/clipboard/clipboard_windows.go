@@ -650,6 +650,25 @@ func readU16(data []byte, offset int) uint16 {
 	return uint16(data[offset]) | uint16(data[offset+1])<<8
 }
 
+// DibDimensions returns the pixel width and height stored in a DIB's
+// BITMAPINFOHEADER. A negative biHeight (top-down DIB) is reported as its
+// absolute value. ok is false when the header is too short or the dimensions
+// are not positive.
+func DibDimensions(dib []byte) (width, height int, ok bool) {
+	if len(dib) < 12 {
+		return 0, 0, false
+	}
+	width = int(readI32(dib, 4))
+	height = int(readI32(dib, 8))
+	if height < 0 {
+		height = -height
+	}
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
 func readU32(data []byte, offset int) uint32 {
 	return uint32(data[offset]) |
 		uint32(data[offset+1])<<8 |

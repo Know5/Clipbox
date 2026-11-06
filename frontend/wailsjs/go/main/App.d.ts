@@ -28,6 +28,8 @@ export function GetAppSettings():Promise<main.AppSettings>;
 
 export function GetClipDetails(arg1:number):Promise<clipboard.ClipEntry>;
 
+export function GetClipImageMeta(arg1:Array<number>):Promise<Array<main.ClipImageMeta>>;
+
 export function GetClipPage(arg1:number,arg2:number):Promise<main.ClipPage>;
 
 export function GetClipPageByType(arg1:string,arg2:number,arg3:number):Promise<main.ClipPage>;
@@ -44,7 +46,11 @@ export function GetImageDataURL(arg1:number):Promise<string>;
 
 export function GetLastTargetInfo():Promise<main.TargetWindowInfo>;
 
+export function GetSourceIcon(arg1:string):Promise<string>;
+
 export function GetStorageStats():Promise<storage.Stats>;
+
+export function GetSystemAccentColor():Promise<string>;
 
 export function GetWindowPinned():Promise<boolean>;
 
