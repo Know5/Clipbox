@@ -146,3 +146,27 @@
 - [ ] 真实键盘唤起后,选中行用强调色实底是否顺眼;浅色主题下是否够清楚。
 - [ ] 一屏 15 条是否足够(如需更多,只能减行高或加窗口高度)。
 - [ ] 来源图标在 `%LOCALAPPDATA%` 下安装的普通程序中是否都能取到。
+
+## 第 4 步:2026-11-09 开机自启再次失效的归因(0.3.1)
+
+### 现象与证据
+- 11-06 部署 0.3.1 之前之后都没有新的登录启动记录(`%USERPROFILE%\.clipbox\clipbox.log` 最后一次 `startup ... startHidden=true` 是 11-06 的手动运行)。
+- Run 值正确:`"C:\Users\QGS\AppData\Local\Programs\ClipBox\ClipBox.exe" --hidden`,exe 存在且为 0.3.0。
+- 真正原因:Windows 自己的启动项开关是关的。
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run\ClipBox` = `03 00 00 00 CA FE 4F 0E 0D 5D DD 01`,首字节 `0x03` = 已禁用,时间戳 **2026-10-16 09:24:14**(本地)。
+  也就是说从 10-16 起,无论 Run 值怎么修,Windows 每次登录都直接跳过 ClipBox;开发期一直手动启动,所以没人发现。不是 0.3.0 的回归,也不是自启逻辑写错。
+
+### 修复
+- `startup_windows.go`:读取并解码 `StartupApproved\Run`(0x02 启用、0x00 未记录,其余视为禁用);`setStartAtLogin(true)` 在写 Run 值之后把标志写回 `02 00 00 00` + 零时间戳(Task Manager 自己写的就是这个形状)。
+- 启动时:意图为开但被 Windows 禁用 → 只写日志提示,**不偷偷改回**(可能是用户自己在任务管理器里关的)。
+- 设置页(常规 → 开机自启):检测到被禁用时显示提示和「启用启动项」按钮(新 API `RepairStartAtLogin`),不再让用户猜。
+- 回归测试 `TestStartupApprovedDisabled`(缺值/启用/未记录/0x03/0x06/0x0a)。
+
+### 验证
+- 标志保持 `0x03` 启动 0.3.1:日志出现 `start-at-login entry is disabled by Windows startup manager`。
+- 把标志写回 `02 00 00 00`(与代码写入的字节相同)后启动:不再提示,Run 值不变。
+- 部署 0.3.1 到 `%LOCALAPPDATA%\Programs\ClipBox\ClipBox.exe`:隐藏启动 0.39 秒托盘就绪,前台零变化,托盘退出正常。
+- 本机启动项已重新启用;下次登录应自动启动。若再被某些「启动项管理」工具关掉,设置页会直接提示。
+
+### 仍不能保证的部分
+- 如果外部工具(杀软、优化软件、系统设置)把启动项再关一次,任何程序都无法单方面阻止;能做的是**检测到并明确告诉用户**,这版已经做到。

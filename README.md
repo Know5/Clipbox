@@ -9,6 +9,7 @@ Windows 剪贴板历史工具。`Ctrl+Alt+V` 唤起，输入即搜，选中即�
 - 需要 Microsoft Edge WebView2 运行时（Windows 11 和新版 Windows 10 已内置）。
 - 未做代码签名，SmartScreen 拦截时点「更多信息」→「仍要运行」。
 - 校验下载：同一 Release 的 `checksums.sha256`。
+- 如果任务管理器 →「启动」里 ClipBox 被禁用(系统或优化工具关的),登录时会被静默跳过。设置 → 常规 → 开机自启 会提示,并可按「启用启动项」一键恢复。
 
 ## 用法
 

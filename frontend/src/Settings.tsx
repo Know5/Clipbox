@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { CheckForUpdates, DownloadUpdatePackage, ExportBackup, ExportDiagnostics, GetAppInfo, GetAppSettings, GetHotkeySettings, GetLastTargetInfo, GetStorageStats, ImportBackup, OpenDataDir, QuitApp, RunAutoBackupNow, RunCleanupNow, RunStorageMaintenance, SelectAutoBackupDir, UpdateAppSettings, UpdateHotkey } from "../wailsjs/go/main/App";
+import { CheckForUpdates, DownloadUpdatePackage, ExportBackup, ExportDiagnostics, GetAppInfo, GetAppSettings, GetHotkeySettings, GetLastTargetInfo, GetStorageStats, ImportBackup, RepairStartAtLogin, OpenDataDir, QuitApp, RunAutoBackupNow, RunCleanupNow, RunStorageMaintenance, SelectAutoBackupDir, UpdateAppSettings, UpdateHotkey } from "../wailsjs/go/main/App";
 import { EventsOn } from "../wailsjs/runtime/runtime";
 import "./Settings.css";
 
@@ -26,6 +26,7 @@ interface AppSettings {
   autoBackupMaxFiles: number;
   excludedApps: string[];
   excludedWindowTitles: string[];
+  startAtLoginBlocked: boolean;
 }
 
 interface AppInfo {
@@ -128,6 +129,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   autoBackupMaxFiles: 10,
   excludedApps: [],
   excludedWindowTitles: [],
+  startAtLoginBlocked: false,
 };
 
 const DEFAULT_APP_INFO: AppInfo = {
@@ -262,6 +264,8 @@ export default function Settings({ onBack }: SettingsProps) {
   const [lastTargetInfo, setLastTargetInfo] = useState<TargetWindowInfo>(DEFAULT_TARGET_INFO);
   const [settingsMessage, setSettingsMessage] = useState("");
   const [rulesMessage, setRulesMessage] = useState("");
+  const [repairing, setRepairing] = useState(false);
+  const [repairMessage, setRepairMessage] = useState("");
   const [storageMessage, setStorageMessage] = useState("");
   const [appMessage, setAppMessage] = useState("");
   const [cleanupRunning, setCleanupRunning] = useState(false);
@@ -683,6 +687,21 @@ export default function Settings({ onBack }: SettingsProps) {
 
   const currentParts = currentDisplay.split(/\s*\+\s*/);
 
+  const repairStartAtLogin = async () => {
+    if (repairing) return;
+    setRepairing(true);
+    setRepairMessage("");
+    try {
+      const ok = await RepairStartAtLogin();
+      setAppSettings((prev) => ({ ...prev, startAtLogin: true, startAtLoginBlocked: !ok }));
+      setRepairMessage(ok ? "已启用" : "仍被 Windows 阻止，请在任务管理器 → 启动 里启用");
+    } catch (e) {
+      setRepairMessage(errText(e, "启用失败"));
+    } finally {
+      setRepairing(false);
+    }
+  };
+
   const [tab, setTab] = useState<SettingsTab>("general");
 
   return (
@@ -769,6 +788,22 @@ export default function Settings({ onBack }: SettingsProps) {
                 onChange={() => updateBooleanSetting("startAtLogin")}
               />
             </label>
+            {appSettings.startAtLogin && appSettings.startAtLoginBlocked && (
+              <div className="setting-row stack">
+                <div>
+                  <div className="hotkey-label">Windows 禁用了这个启动项</div>
+                  <div className="hotkey-description">
+                    任务管理器 →「启动」里 ClipBox 被关掉了，登录时会被跳过。点「启用启动项」写回 Run 值并允许它运行。
+                  </div>
+                </div>
+                <div className="settings-actions inline">
+                  {repairMessage && <span className="save-message">{repairMessage}</span>}
+                  <button className="btn" onClick={repairStartAtLogin} disabled={repairing}>
+                    {repairing ? "处理中…" : "启用启动项"}
+                  </button>
+                </div>
+              </div>
+            )}
             <label className="setting-row">
               <div>
                 <div className="hotkey-label">复制时顺带粘贴</div>

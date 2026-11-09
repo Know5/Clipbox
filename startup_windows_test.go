@@ -132,3 +132,23 @@ func TestSetStartAtLoginNeverWritesFromTestBinary(t *testing.T) {
 		t.Fatalf("test binary removed the Run value: %q -> %q", before, after)
 	}
 }
+
+func TestStartupApprovedDisabled(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  []byte
+		want bool
+	}{
+		{"no value", nil, false},
+		{"enabled", []byte{0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, false},
+		{"no decision", []byte{0x00, 0, 0, 0}, false},
+		{"disabled by user", []byte{0x03, 0xCA, 0xFE, 0x4F, 0x0E, 0x0D, 0x5D, 0xDD, 0x01}, true},
+		{"disabled variant 0x06", []byte{0x06, 0, 0, 0}, true},
+		{"disabled variant 0x0a", []byte{0x0A, 0, 0, 0}, true},
+	}
+	for _, tc := range cases {
+		if got := startupApprovedDisabled(tc.raw); got != tc.want {
+			t.Errorf("%s: startupApprovedDisabled(% X) = %v, want %v", tc.name, tc.raw, got, tc.want)
+		}
+	}
+}

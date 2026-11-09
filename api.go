@@ -793,6 +793,26 @@ func (a *App) QuitApp() {
 	}
 }
 
+// RepairStartAtLogin rewrites the Run entry for the current executable and
+// clears the "disabled" flag Windows' startup manager keeps separately.
+// Returns whether the entry is usable afterwards.
+func (a *App) RepairStartAtLogin() (bool, error) {
+	if err := setStartAtLogin(true); err != nil {
+		return false, err
+	}
+	if err := a.store.SetSetting("start_at_login", "true"); err != nil {
+		return false, err
+	}
+	a.invalidateSettingsCache()
+	ok := !startAtLoginDisabledByOS()
+	if ok {
+		a.logInfof("start-at-login entry re-enabled")
+	} else {
+		a.logErrorf("start-at-login entry still disabled after repair")
+	}
+	return ok, nil
+}
+
 func (a *App) GetHotkeySettings() HotkeyConfig {
 	modStr, _ := a.store.GetSetting("hotkey_modifiers")
 	vkStr, _ := a.store.GetSetting("hotkey_key")

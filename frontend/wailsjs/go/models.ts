@@ -82,6 +82,7 @@ export namespace main {
 	    autoBackupMaxFiles: number;
 	    excludedApps: string[];
 	    excludedWindowTitles: string[];
+	    startAtLoginBlocked: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AppSettings(source);
@@ -107,6 +108,7 @@ export namespace main {
 	        this.autoBackupMaxFiles = source["autoBackupMaxFiles"];
 	        this.excludedApps = source["excludedApps"];
 	        this.excludedWindowTitles = source["excludedWindowTitles"];
+	        this.startAtLoginBlocked = source["startAtLoginBlocked"];
 	    }
 	}
 	export class ClipExportResult {

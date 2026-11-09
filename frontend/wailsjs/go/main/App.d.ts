@@ -64,6 +64,8 @@ export function QuitApp():Promise<void>;
 
 export function ReadClipboardText():Promise<string>;
 
+export function RepairStartAtLogin():Promise<boolean>;
+
 export function RunAutoBackupNow():Promise<storage.BackupStats>;
 
 export function RunCleanupNow():Promise<storage.Stats>;

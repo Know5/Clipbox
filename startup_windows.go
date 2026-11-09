@@ -14,6 +14,16 @@ import (
 const startupRegistryPath = `Software\Microsoft\Windows\CurrentVersion\Run`
 const startupRegistryName = "ClipBox"
 
+// Windows keeps its own on/off switch for Run entries here (Task Manager 启动,
+// 设置 > 应用 > 启动). A Run value can be present while this flag is "disabled",
+// in which case Windows silently skips it at login.
+const startupApprovedPath = `Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run`
+
+const (
+	startupApprovedEnabled  = 0x02 // written when the entry is switched on
+	startupApprovedImplicit = 0x00 // no decision recorded; Windows runs it
+)
+
 // underTest 报告当前进程是否为 `go test` 构建的测试二进制。
 //
 // 2026-10-29 定位的事故：TestUpdateAppSettingsFailureKeepsPersistedState 调用
@@ -50,7 +60,62 @@ func setStartAtLogin(enabled bool) error {
 	if err != nil {
 		return err
 	}
-	return key.SetStringValue(startupRegistryName, command)
+	if err := key.SetStringValue(startupRegistryName, command); err != nil {
+		return err
+	}
+	// Re-adding the Run value does not clear a "disabled" flag left behind by
+	// Windows' startup manager, so do it explicitly: asking for start-at-login
+	// is an explicit choice to have it enabled.
+	return clearStartupApprovedDisabled()
+}
+
+// startAtLoginDisabledByOS reports whether Windows' startup manager has the
+// ClipBox entry switched off. When true the Run value is intact but Windows
+// never launches the app at login — the 2026-11-09 report ("开机自启又失败了")
+// was exactly this: the flag had been 0x03 since 2026-10-16 while every version
+// of the Run value looked correct.
+func startAtLoginDisabledByOS() bool {
+	if underTest() {
+		return false
+	}
+	key, err := registry.OpenKey(registry.CURRENT_USER, startupApprovedPath, registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer key.Close()
+
+	raw, _, err := key.GetBinaryValue(startupRegistryName)
+	if err != nil {
+		return false
+	}
+	return startupApprovedDisabled(raw)
+}
+
+// startupApprovedDisabled decodes the StartupApproved\Run blob: byte 0 is the
+// state, the remaining 8 bytes are the FILETIME when it was changed. Only 0x02
+// (enabled) and 0x00 (no decision) mean Windows launches the entry.
+func startupApprovedDisabled(raw []byte) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	return raw[0] != startupApprovedEnabled && raw[0] != startupApprovedImplicit
+}
+
+// clearStartupApprovedDisabled records "enabled, never disabled" for the entry.
+func clearStartupApprovedDisabled() error {
+	if underTest() {
+		return nil
+	}
+	key, _, err := registry.CreateKey(registry.CURRENT_USER, startupApprovedPath, registry.SET_VALUE)
+	if err != nil {
+		return err
+	}
+	defer key.Close()
+
+	// 12 bytes: state + zero FILETIME, the shape Task Manager itself writes.
+	return key.SetBinaryValue(startupRegistryName, []byte{
+		startupApprovedEnabled, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	})
 }
 
 // startupRegistryValue returns the raw command stored in the Run key, or "".

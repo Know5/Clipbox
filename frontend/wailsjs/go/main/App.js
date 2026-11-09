@@ -122,6 +122,10 @@ export function ReadClipboardText() {
   return window['go']['main']['App']['ReadClipboardText']();
 }
 
+export function RepairStartAtLogin() {
+  return window['go']['main']['App']['RepairStartAtLogin']();
+}
+
 export function RunAutoBackupNow() {
   return window['go']['main']['App']['RunAutoBackupNow']();
 }

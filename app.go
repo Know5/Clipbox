@@ -196,8 +196,14 @@ func (a *App) startup(ctx context.Context) {
 
 	// 开机自启自愈：Run 值缺失、或指向的 exe 已不存在时改指当前 exe；指向另一个
 	// 仍存在的副本时不动，避免临时副本抢走自启。意图为关时清理 Run 值。
-	if err := reconcileStartAtLogin(a.loadStartAtLoginIntent()); err != nil {
+	startAtLoginWanted := a.loadStartAtLoginIntent()
+	if err := reconcileStartAtLogin(startAtLoginWanted); err != nil {
 		a.logErrorf("failed to reconcile start-at-login on startup: %v", err)
+	}
+	if startAtLoginWanted && startAtLoginDisabledByOS() {
+		// Run 值没问题，但 Windows 启动管理器把它关了；这时每次登录都会静默跳过。
+		// 不去偷偷改回来（可能是用户自己关的），只在日志里留痕，设置页会给出提示。
+		a.logErrorf("start-at-login entry is disabled by Windows startup manager; enable it in Task Manager > Startup or press 启用启动项 in settings")
 	}
 
 	a.mu.Lock()

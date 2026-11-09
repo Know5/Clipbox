@@ -33,6 +33,10 @@ type AppSettings struct {
 	AutoBackupMaxFiles     int      `json:"autoBackupMaxFiles"`
 	ExcludedApps           []string `json:"excludedApps"`
 	ExcludedWindowTitles   []string `json:"excludedWindowTitles"`
+
+	// StartAtLoginBlocked is derived, not stored: the setting says on, but
+	// Windows' startup manager has the Run entry switched off.
+	StartAtLoginBlocked bool `json:"startAtLoginBlocked"`
 }
 
 var sensitiveTextPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|token|secret|api[_-]?key|authorization|bearer|access[_-]?key)\b\s*[:=]`)
@@ -116,7 +120,9 @@ func normalizeAppSettings(settings AppSettings) AppSettings {
 }
 
 func (a *App) GetAppSettings() AppSettings {
-	return a.loadAppSettings()
+	settings := a.loadAppSettings()
+	settings.StartAtLoginBlocked = settings.StartAtLogin && startAtLoginDisabledByOS()
+	return settings
 }
 
 func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
