@@ -49,9 +49,7 @@ var (
 const (
 	CF_UNICODETEXT     = 13
 	CF_DIB             = 8
-	CF_BITMAP          = 2
 	WM_CLIPBOARDUPDATE = 0x031D
-	WM_DESTROY         = 0x0002
 	WM_QUIT_MSG        = 0x0012
 	GMEM_MOVEABLE      = 0x0002
 	ERROR_CLASS_EXISTS = 1410
@@ -878,10 +876,6 @@ func WriteTextToClipboard(text string) error {
 		return callError(err)
 	}
 	return nil
-}
-
-func WriteImageToClipboard(dibData []byte) error {
-	return WriteDibToClipboard(dibData)
 }
 
 // ReadText 读取剪贴板里的 Unicode 文本，不写历史。

@@ -150,7 +150,7 @@ func TestShouldCaptureUsesForegroundExclusion(t *testing.T) {
 		t.Fatalf("SetSetting() error = %v", err)
 	}
 
-	if app.shouldCapture(clipboard.ClipEntry{Type: "text", Content: "ordinary text"}) {
+	if _, ok := app.prepareClipEntry(clipboard.ClipEntry{Type: "text", Content: "ordinary text"}); ok {
 		t.Fatal("shouldCapture() = true, want false for excluded foreground app")
 	}
 }

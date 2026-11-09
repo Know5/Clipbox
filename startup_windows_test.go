@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 
 	"golang.org/x/sys/windows/registry"
@@ -43,7 +44,11 @@ func TestStartupCommandNoGoEscaping(t *testing.T) {
 	}
 	// A correctly-quoted Windows command must round-trip through the same
 	// parser that readback uses, and must point back at this executable.
-	if !startupValuePointsToSelf(cmd) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable(): %v", err)
+	}
+	if !startupCommandMatchesExecutable(cmd, exe) {
 		t.Fatalf("startupCommand() = %q does not point to self after parsing", cmd)
 	}
 }

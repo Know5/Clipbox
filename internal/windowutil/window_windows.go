@@ -29,8 +29,6 @@ var (
 
 const (
 	swRestore                       = 9
-	swShow                          = 5
-	swShowNoActivate                = 8
 	inputKeyboard                   = 1
 	keyeventfKeyUp                  = 0x0002
 	vkControl                       = 0x11

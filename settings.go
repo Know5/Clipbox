@@ -291,11 +291,6 @@ func (a *App) getStringSetting(key string) string {
 	return value
 }
 
-func (a *App) shouldCapture(entry clipboard.ClipEntry) bool {
-	_, ok := a.prepareClipEntry(entry)
-	return ok
-}
-
 func (a *App) prepareClipEntry(entry clipboard.ClipEntry) (clipboard.ClipEntry, bool) {
 	settings := a.loadAppSettings()
 	if settings.CapturePaused {

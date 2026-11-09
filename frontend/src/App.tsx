@@ -71,10 +71,6 @@ function describeClearResult(result?: ClearResult) {
   return "没有可清空记录";
 }
 
-function clipSourceLabel(clip: ClipEntry) {
-  return (clip.sourceApp || "").trim();
-}
-
 function clipSourceTitle(clip: ClipEntry) {
   return [clip.sourceApp, clip.sourceTitle].map((item) => (item || "").trim()).filter(Boolean).join(" · ");
 }

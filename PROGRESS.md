@@ -170,3 +170,29 @@
 
 ### 仍不能保证的部分
 - 如果外部工具(杀软、优化软件、系统设置)把启动项再关一次,任何程序都无法单方面阻止;能做的是**检测到并明确告诉用户**,这版已经做到。
+
+## 第 5 步:2026-11-09 清理死代码与旧启动器(0.3.2,无行为变化)
+
+### 删除的内容
+| 项 | 原因 |
+|---|---|
+| `cmd/hotkeytest/` | 独立的调试用 main 程序,全仓库零引用 |
+| `check_ci.ps1` | 查询 GitHub Actions 运行记录,但 CI 工作流已在 07-15 删除 |
+| `build/darwin/`、`build/README.md` | 项目只支持 Windows;`build/README.md` 是 Wails 模板说明,且指向已删除的 darwin |
+| `dist/release/ClipBox-0.2.1-*`、`notes.md` | 旧版本产物,只保留最新 0.3.1/0.3.2 的 ZIP 与校验文件 |
+| `.github/`(空目录) | 无内容 |
+| `internal/clipboard.WriteImageToClipboard` | 无调用的别名(真正的实现是 `WriteDibToClipboard`) |
+| `internal/clipboard` 的 `CF_BITMAP`、`WM_DESTROY` | 未被引用的常量 |
+| `internal/windowutil` 的 `swShow`、`swShowNoActivate` | 未被引用的常量 |
+| `settings.go shouldCapture` | 测试专用的 `prepareClipEntry` 包装,生产代码零调用 |
+| `startup_windows.go startupValuePointsToSelf` | 同上;测试改为直接用 `startupCommandMatchesExecutable` |
+| `frontend/src/App.tsx clipSourceLabel` | 重写列表后不再被引用 |
+
+### 保留并说明理由
+- `check_mem.ps1`:规格第 3 节仍要用它测空闲内存,是还能用的手动工具。
+- `build/windows/installer/*`:`scripts/package-release.ps1 -BuildInstaller` 仍然依赖。
+- `frontend/package.json.md5`:Wails 判断是否需要 `npm install` 的缓存标记。
+
+### 验证
+- `gofmt -l .` 无输出;`go vet ./...`、`go test ./...` 通过;`tsc --noEmit --noUnusedLocals --noUnusedParameters` 无告警;`wails build -trimpath` 成功。
+- 版本 0.3.2 只为让产物和源码一致(0.3.1 的 ZIP 里是清理前的二进制),功能与 0.3.1 相同。

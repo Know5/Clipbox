@@ -216,14 +216,6 @@ func startupCommandMatchesExecutable(command, executable string) bool {
 	return false
 }
 
-func startupValuePointsToSelf(value string) bool {
-	exe, err := os.Executable()
-	if err != nil {
-		return false
-	}
-	return startupCommandMatchesExecutable(value, exe)
-}
-
 // extractExePath pulls the executable path from a Run command string. It
 // handles the quoted form (`"C:\path\clipbox.exe" --hidden`) and the bare form
 // (`C:\path\clipbox.exe --hidden`).
