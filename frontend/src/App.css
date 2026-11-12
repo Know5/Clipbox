@@ -1,5 +1,20 @@
 /* ClipBox — compact Windows clipboard popup */
 
+.app-error {
+  padding: 24px;
+  display: grid;
+  gap: 12px;
+  font-size: 13px;
+}
+.detail-panel:focus {
+  outline: none;
+}
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 :root {
   /* Neutral surfaces (Windows 11 dark) */
   --bg-primary: rgb(32, 32, 32);
@@ -40,7 +55,9 @@
   --scrollbar-thumb: rgba(255, 255, 255, 0.08);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.15);
   --kbd-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  --font-sans:
+    "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC",
+    "Noto Sans CJK SC", sans-serif;
   --font-mono: "Cascadia Mono", "Consolas", var(--font-sans);
   --transition-fast: 0.1s ease-out;
   /* One text row, one image row. Everything else derives from these. */
@@ -202,7 +219,9 @@ kbd {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
   --wails-draggable: no-drag;
 }
 
@@ -643,7 +662,6 @@ kbd {
 .clip-item.selected .clip-pin {
   color: var(--accent-contrast);
 }
-
 
 /* Row actions replace the trailing metadata while hovered/selected. */
 .clip-actions {

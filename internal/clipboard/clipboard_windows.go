@@ -3,10 +3,12 @@ package clipboard
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -201,6 +203,7 @@ type Watcher struct {
 	hwnd      uintptr
 	callback  OnClipChangeFunc
 	onSkip    OnClipSkipFunc
+	filter    func(string) bool
 	stopCh    chan struct{}
 	stopOnce  sync.Once
 	startOnce sync.Once
@@ -219,6 +222,12 @@ func (w *Watcher) SetSkipCallback(callback OnClipSkipFunc) {
 		return
 	}
 	w.onSkip = callback
+}
+
+// SetCaptureFilter runs before opening the system clipboard. Pausing capture
+// or disabling images therefore avoids reading/allocating their contents.
+func (w *Watcher) SetCaptureFilter(filter func(string) bool) {
+	w.filter = filter
 }
 
 func (w *Watcher) reportSkip(reason SkipReason) {
@@ -286,7 +295,7 @@ func clipboardWndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr
 			return 0
 		}
 		if globalWatcher != nil && globalWatcher.callback != nil {
-			entry, reason := readClipboard()
+			entry, reason := readClipboard(globalWatcher.filter)
 			if entry != nil {
 				globalWatcher.callback(*entry)
 			} else if reason != "" {
@@ -374,27 +383,52 @@ func (w *Watcher) messageLoop(initCh chan<- error) {
 		}
 	}
 }
-func readClipboard() (*ClipEntry, SkipReason) {
+func readClipboard(filter func(string) bool) (*ClipEntry, SkipReason) {
+	allowText, allowImage := true, true
+	if filter != nil {
+		allowText, allowImage = filter("text"), filter("image")
+	}
+	if !allowText && !allowImage {
+		return nil, ""
+	}
+	entry, dib, reason := readClipboardSnapshot(allowText, allowImage)
+	// The system clipboard has been closed before file I/O, thumbnail
+	// generation, hashing and database writes. Other apps can copy immediately.
+	if dib != nil {
+		return storeImageSnapshot(dib)
+	}
+	return entry, reason
+}
+
+func readClipboardSnapshot(allowText, allowImage bool) (*ClipEntry, []byte, SkipReason) {
 	ret, _, _ := procOpenClipboard.Call(0)
 	if ret == 0 {
-		return nil, SkipReasonBusyClipboard
+		return nil, nil, SkipReasonBusyClipboard
 	}
 	defer procCloseClipboard.Call()
 
 	// 尊重来源应用的隐私标记（密码管理器等），跳过记录。
 	if clipboardMarkedPrivate() {
-		return nil, SkipReasonPrivateContent
+		return nil, nil, SkipReasonPrivateContent
 	}
 
 	if ret, _, _ := procIsClipboardFormatAvailable.Call(CF_DIB); ret != 0 {
-		return readImageFromClipboard()
+		if !allowImage {
+			return nil, nil, ""
+		}
+		dib, reason := readImageSnapshot()
+		return nil, dib, reason
 	}
 
 	if ret, _, _ := procIsClipboardFormatAvailable.Call(CF_UNICODETEXT); ret != 0 {
-		return readTextFromClipboard()
+		if !allowText {
+			return nil, nil, ""
+		}
+		entry, reason := readTextFromClipboard()
+		return entry, nil, reason
 	}
 
-	return nil, SkipReasonUnsupportedType
+	return nil, nil, SkipReasonUnsupportedType
 }
 func readTextFromClipboard() (*ClipEntry, SkipReason) {
 	h, _, _ := procGetClipboardData.Call(CF_UNICODETEXT)
@@ -439,7 +473,7 @@ func readTextFromClipboard() (*ClipEntry, SkipReason) {
 	}, ""
 }
 
-func readImageFromClipboard() (*ClipEntry, SkipReason) {
+func readImageSnapshot() ([]byte, SkipReason) {
 	h, _, _ := procGetClipboardData.Call(CF_DIB)
 	if h == 0 {
 		return nil, SkipReasonReadFailed
@@ -463,7 +497,10 @@ func readImageFromClipboard() (*ClipEntry, SkipReason) {
 	// array type that caused massive memory pressure / GC stalls.
 	dibData := make([]byte, size)
 	copy(dibData, byteSliceFromPointer(ptr, int(size)))
+	return dibData, ""
+}
 
+func storeImageSnapshot(dibData []byte) (*ClipEntry, SkipReason) {
 	// Save DIB to a file on disk — never store in SQLite as base64.
 	// Screenshots can be 8+ MB raw; base64 inflates that another 33 %.
 	filePath := ""
@@ -587,12 +624,16 @@ type dibInfo struct {
 }
 
 func parseDibInfo(dib []byte) (dibInfo, error) {
+	return parseDibHeader(dib, int64(len(dib)))
+}
+
+func parseDibHeader(dib []byte, size int64) (dibInfo, error) {
 	if len(dib) < 40 {
 		return dibInfo{}, fmt.Errorf("DIB too small")
 	}
 
 	headerSize := int(readU32(dib, 0))
-	if headerSize < 40 || headerSize > len(dib) {
+	if headerSize < 40 || int64(headerSize) > size {
 		return dibInfo{}, fmt.Errorf("invalid DIB header size")
 	}
 
@@ -619,7 +660,7 @@ func parseDibInfo(dib []byte) (dibInfo, error) {
 		pixelOffset += int(clrUsed * 4)
 	} else if bitCount <= 8 {
 		pixelOffset += int((1 << bitCount) * 4)
-	} else if compression == 3 {
+	} else if compression == 3 && headerSize == 40 {
 		pixelOffset += 12
 	}
 
@@ -628,7 +669,7 @@ func parseDibInfo(dib []byte) (dibInfo, error) {
 		return dibInfo{}, fmt.Errorf("invalid DIB bit depth")
 	}
 	rowStride := ((width*bytesPerPixel + 3) / 4) * 4
-	if pixelOffset < 0 || pixelOffset+rowStride*height > len(dib) {
+	if pixelOffset < 0 || int64(pixelOffset) > size || rowStride <= 0 || int64(rowStride) > size-int64(pixelOffset) || int64(height) > (size-int64(pixelOffset))/int64(rowStride) {
 		return dibInfo{}, fmt.Errorf("DIB pixel data truncated")
 	}
 
@@ -642,6 +683,46 @@ func parseDibInfo(dib []byte) (dibInfo, error) {
 		pixelOffset: pixelOffset,
 		rowStride:   rowStride,
 	}, nil
+}
+
+// DIBPreview samples only the rows needed by a bounded detail preview. A 4K
+// source stays on disk instead of being read into a full-resolution buffer.
+func DIBPreview(source io.ReaderAt, size int64, maxSide int) (*image.RGBA, error) {
+	var header [124]byte
+	n, _ := source.ReadAt(header[:], 0)
+	info, err := parseDibHeader(header[:n], size)
+	if err != nil {
+		return nil, err
+	}
+	if (info.bitCount != 24 && info.bitCount != 32) || (info.compression != 0 && info.compression != 3) || maxSide < 1 || maxSide > 2048 || size > 50*1024*1024 {
+		return nil, fmt.Errorf("unsupported preview format")
+	}
+	width, height := scaledDimensions(info.width, info.height, maxSide)
+	preview := image.NewRGBA(image.Rect(0, 0, width, height))
+	row := make([]byte, info.rowStride)
+	bytesPerPixel := int(info.bitCount / 8)
+	for y := 0; y < height; y++ {
+		sourceY := y * info.height / height
+		if !info.topDown {
+			sourceY = info.height - 1 - sourceY
+		}
+		if _, err := source.ReadAt(row, int64(info.pixelOffset+sourceY*info.rowStride)); err != nil {
+			return nil, err
+		}
+		for x := 0; x < width; x++ {
+			sourceX := x * info.width / width * bytesPerPixel
+			destination := y*preview.Stride + x*4
+			preview.Pix[destination] = row[sourceX+2]
+			preview.Pix[destination+1] = row[sourceX+1]
+			preview.Pix[destination+2] = row[sourceX]
+			alpha := byte(255)
+			if bytesPerPixel == 4 && row[sourceX+3] != 0 {
+				alpha = row[sourceX+3]
+			}
+			preview.Pix[destination+3] = alpha
+		}
+	}
+	return preview, nil
 }
 
 func readU16(data []byte, offset int) uint16 {
@@ -727,52 +808,45 @@ func dibPixel(dib []byte, info dibInfo, x, y int) (color.RGBA, bool) {
 }
 
 func dibToBmp(dib []byte) []byte {
-	if len(dib) < 40 {
+	header, err := BMPFileHeader(dib, int64(len(dib)))
+	if err != nil {
 		return nil
 	}
-	biSize := uint32(dib[0]) | uint32(dib[1])<<8 | uint32(dib[2])<<16 | uint32(dib[3])<<24
-
-	offBits := uint32(14) + biSize
-
-	var bitCount uint16
-	if len(dib) >= 16 {
-		bitCount = uint16(dib[14]) | uint16(dib[15])<<8
-	}
-
-	var compression uint32
-	if len(dib) >= 20 {
-		compression = uint32(dib[16]) | uint32(dib[17])<<8 | uint32(dib[18])<<16 | uint32(dib[19])<<24
-	}
-
-	var clrUsed uint32
-	if len(dib) >= 36 {
-		clrUsed = uint32(dib[32]) | uint32(dib[33])<<8 | uint32(dib[34])<<16 | uint32(dib[35])<<24
-	}
-
-	if clrUsed > 0 {
-		offBits += clrUsed * 4
-	} else if bitCount <= 8 {
-		offBits += (1 << bitCount) * 4
-	} else if compression == 3 {
-		offBits += 12
-	}
-
-	fileSize := uint32(len(dib)) + 14
-
-	bmp := make([]byte, fileSize)
-	bmp[0] = 'B'
-	bmp[1] = 'M'
-	bmp[2] = byte(fileSize)
-	bmp[3] = byte(fileSize >> 8)
-	bmp[4] = byte(fileSize >> 16)
-	bmp[5] = byte(fileSize >> 24)
-	bmp[10] = byte(offBits)
-	bmp[11] = byte(offBits >> 8)
-	bmp[12] = byte(offBits >> 16)
-	bmp[13] = byte(offBits >> 24)
-
+	bmp := make([]byte, len(dib)+14)
+	copy(bmp, header[:])
 	copy(bmp[14:], dib)
 	return bmp
+}
+
+// BMPFileHeader only needs the first bytes of a DIB, so stored image files
+// can be served without loading and rewrapping their pixel data in memory.
+func BMPFileHeader(dib []byte, size int64) ([14]byte, error) {
+	var header [14]byte
+	if len(dib) < 40 || size < 40 || size > 50*1024*1024 {
+		return header, fmt.Errorf("invalid DIB size")
+	}
+	headerSize := int64(binary.LittleEndian.Uint32(dib[:4]))
+	if headerSize < 40 || headerSize > size {
+		return header, fmt.Errorf("invalid DIB header")
+	}
+	bitCount := binary.LittleEndian.Uint16(dib[14:16])
+	compression := binary.LittleEndian.Uint32(dib[16:20])
+	colors := int64(binary.LittleEndian.Uint32(dib[32:36]))
+	offset := headerSize
+	if colors > 0 {
+		offset += colors * 4
+	} else if bitCount <= 8 {
+		offset += int64(1<<bitCount) * 4
+	} else if compression == 3 && headerSize == 40 {
+		offset += 12
+	}
+	if offset > size {
+		return header, fmt.Errorf("truncated DIB")
+	}
+	header[0], header[1] = 'B', 'M'
+	binary.LittleEndian.PutUint32(header[2:6], uint32(size+14))
+	binary.LittleEndian.PutUint32(header[10:14], uint32(offset+14))
+	return header, nil
 }
 
 func DibToBmp(dib []byte) []byte {

@@ -6,13 +6,11 @@ import (
 	"clipbox/internal/storage"
 	"clipbox/internal/windowutil"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -69,65 +67,13 @@ type ClipImageMeta struct {
 	Bytes  int64 `json:"bytes"`
 }
 
-func hotkeyDisplayName(modifiers, keyCode int) string {
-	result := ""
-	if modifiers&hotkey.ModControl != 0 {
-		result += "Ctrl + "
-	}
-	if modifiers&hotkey.ModAlt != 0 {
-		result += "Alt + "
-	}
-	if modifiers&hotkey.ModShift != 0 {
-		result += "Shift + "
-	}
-	if modifiers&hotkey.ModWin != 0 {
-		result += "Win + "
-	}
-	keyName := ""
-	switch {
-	case keyCode >= 0x41 && keyCode <= 0x5A:
-		keyName = string(rune('A' + keyCode - 0x41))
-	case keyCode >= 0x30 && keyCode <= 0x39:
-		keyName = string(rune('0' + keyCode - 0x30))
-	case keyCode >= 0x70 && keyCode <= 0x7B:
-		keyName = fmt.Sprintf("F%d", keyCode-0x70+1)
-	case keyCode == 0x20:
-		keyName = "Space"
-	case keyCode == 0x0D:
-		keyName = "Enter"
-	case keyCode == 0xBE:
-		keyName = "."
-	case keyCode == 0xBC:
-		keyName = ","
-	case keyCode == 0xBF:
-		keyName = "/"
-	case keyCode == 0xBA:
-		keyName = ";"
-	case keyCode == 0xDE:
-		keyName = "'"
-	case keyCode == 0xDB:
-		keyName = "["
-	case keyCode == 0xDD:
-		keyName = "]"
-	case keyCode == 0xDC:
-		keyName = "\\"
-	case keyCode == 0xC0:
-		keyName = "`"
-	case keyCode == 0xBD:
-		keyName = "-"
-	case keyCode == 0xBB:
-		keyName = "="
-	default:
-		keyName = fmt.Sprintf("0x%02X", keyCode)
-	}
-	return result + keyName
-}
-
 func (a *App) GetClips(limit, offset int) ([]clipboard.ClipEntry, error) {
 	return a.store.GetAll(limit, offset)
 }
 
 func (a *App) GetClipPage(limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.GetAll(limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -140,6 +86,8 @@ func (a *App) GetClipPage(limit, offset int) (ClipPage, error) {
 }
 
 func (a *App) GetClipPageByType(clipType string, limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.GetByType(clipType, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -152,6 +100,8 @@ func (a *App) GetClipPageByType(clipType string, limit, offset int) (ClipPage, e
 }
 
 func (a *App) GetClipPageByTypeAndTag(clipType, tag string, limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.GetByTypeAndTag(clipType, tag, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -180,6 +130,8 @@ func (a *App) SearchClips(query string) ([]clipboard.ClipEntry, error) {
 }
 
 func (a *App) SearchClipPage(query string, limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.Search(query, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -192,6 +144,8 @@ func (a *App) SearchClipPage(query string, limit, offset int) (ClipPage, error) 
 }
 
 func (a *App) SearchClipPageByType(query, clipType string, limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.SearchByType(query, clipType, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -204,6 +158,8 @@ func (a *App) SearchClipPageByType(query, clipType string, limit, offset int) (C
 }
 
 func (a *App) SearchClipPageByTypeAndTag(query, clipType, tag string, limit, offset int) (ClipPage, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	items, err := a.store.SearchByTypeAndTag(query, clipType, tag, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
@@ -227,6 +183,8 @@ func (a *App) GetClipDetails(id int64) (clipboard.ClipEntry, error) {
 }
 
 func (a *App) UpdateClipMetadata(id int64, note, tags string) (clipboard.ClipEntry, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	entry, err := a.store.UpdateMetadata(id, note, tags)
 	if err != nil {
 		return clipboard.ClipEntry{}, err
@@ -234,7 +192,7 @@ func (a *App) UpdateClipMetadata(id int64, note, tags string) (clipboard.ClipEnt
 	if entry == nil {
 		return clipboard.ClipEntry{}, fmt.Errorf("clip %d not found", id)
 	}
-	// 前端拿到返回值后本地更新对应条目，无需广播 clips:changed 触发整页重载。
+	a.notifyHistoryChange(id, nil)
 	a.logInfof("updated clip metadata id=%d noteLen=%d tagsLen=%d", id, len([]rune(entry.Note)), len([]rune(entry.Tags)))
 	return sanitizeClipDetails(*entry), nil
 }
@@ -358,7 +316,7 @@ func (a *App) ExportClip(id int64) (ClipExportResult, error) {
 	}
 
 	defaultName, extension, filters := exportDialogDefaults(*entry)
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := a.saveFileDialog(runtime.SaveDialogOptions{
 		Title:           "导出剪贴板记录",
 		DefaultFilename: defaultName,
 		Filters:         filters,
@@ -530,31 +488,35 @@ func (a *App) copyEntryToClipboard(id int64) (*clipboard.ClipEntry, error) {
 }
 
 func (a *App) CopyToClipboard(id int64) error {
+	a.clipboardActionMu.Lock()
+	defer a.clipboardActionMu.Unlock()
 	if _, err := a.copyEntryToClipboard(id); err != nil {
 		return err
 	}
 
 	autoPaste := a.loadAppSettings().AutoPaste
-	go func() {
-		a.mu.Lock()
-		pinned := a.windowPinned
-		a.mu.Unlock()
-		if !pinned {
-			a.hideWindow()
+	a.mu.Lock()
+	pinned := a.windowPinned
+	a.mu.Unlock()
+	if !pinned {
+		a.hideWindow()
+	}
+	if autoPaste {
+		if err := a.pasteToLastTarget(); err != nil {
+			return fmt.Errorf("已复制，但自动粘贴失败: %w", err)
 		}
-		if autoPaste {
-			a.pasteToLastTarget()
-		}
-	}()
+	}
 	return nil
 }
 
 // CopyAndPaste copies the clip AND immediately pastes it into the
-// previously active window. Unlike CopyToClipboard, this always pastes
-// regardless of the auto-paste setting and does not hide the window.
+// previously active window. This always pastes regardless of the auto-paste
+// setting, and returns only after injection succeeds or an error is known.
 // 先隐藏 ClipBox 窗口,再把焦点还给原窗口并发送 Ctrl+V。
 // 否则 ClipBox 仍在前台,FocusWindow 会与它争焦点,粘贴常失败。
 func (a *App) CopyAndPaste(id int64) error {
+	a.clipboardActionMu.Lock()
+	defer a.clipboardActionMu.Unlock()
 	a.logInfof("CopyAndPaste called id=%d", id)
 	if _, err := a.copyEntryToClipboard(id); err != nil {
 		a.logErrorf("CopyAndPaste copy failed id=%d: %v", id, err)
@@ -567,8 +529,7 @@ func (a *App) CopyAndPaste(id int64) error {
 	if !pinned {
 		a.hideWindow()
 	}
-	go a.pasteToLastTarget()
-	return nil
+	return a.pasteToLastTarget()
 }
 
 // ReadClipboardText 返回剪贴板里的文本，供搜索框右键"粘贴"使用（不写历史）。
@@ -615,20 +576,34 @@ func (a *App) GetWindowPinned() bool {
 }
 
 func (a *App) TogglePin(id int64) error {
-	return a.store.TogglePin(id)
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+	if err := a.store.TogglePin(id); err != nil {
+		return err
+	}
+	a.notifyHistoryChange(id, nil)
+	return nil
 }
 
 func (a *App) DeleteClip(id int64) error {
-	return a.store.Delete(id)
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
+	if err := a.store.Delete(id); err != nil {
+		return err
+	}
+	a.notifyHistoryChange(0, []int64{id})
+	return nil
 }
 
 func (a *App) ClearAll() (storage.ClearResult, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	result, err := a.store.Clear()
 	if err != nil {
 		return storage.ClearResult{}, err
 	}
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "clips:changed")
+		a.emit("clips:changed")
 	}
 	a.logInfof("cleared clips deleted=%d images=%d pinnedKept=%d", result.DeletedClips, result.DeletedImages, result.PinnedKept)
 	return result, nil
@@ -642,13 +617,12 @@ func (a *App) RunCleanupNow() (storage.Stats, error) {
 	if err := a.applyCurrentCleanup(); err != nil {
 		return storage.Stats{}, err
 	}
-	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "clips:changed")
-	}
 	return a.store.Stats()
 }
 
 func (a *App) RunStorageMaintenance() (storage.MaintenanceResult, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	result, err := a.store.Maintain()
 	if err != nil {
 		a.logErrorf("storage maintenance failed: %v", err)
@@ -665,7 +639,7 @@ func (a *App) RunStorageMaintenance() (storage.MaintenanceResult, error) {
 		result.Vacuumed,
 	)
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "clips:changed")
+		a.emit("clips:changed")
 	}
 	return result, nil
 }
@@ -722,7 +696,7 @@ func (a *App) ExportBackup() (storage.BackupStats, error) {
 		return storage.BackupStats{}, fmt.Errorf("app is not ready")
 	}
 	defaultName := "clipbox-backup-" + time.Now().Format("20060102-150405") + ".clipbox-backup"
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := a.saveFileDialog(runtime.SaveDialogOptions{
 		Title:           "导出 ClipBox 备份",
 		DefaultFilename: defaultName,
 		Filters: []runtime.FileFilter{
@@ -749,7 +723,7 @@ func (a *App) ImportBackup() (storage.BackupStats, error) {
 	if a.ctx == nil {
 		return storage.BackupStats{}, fmt.Errorf("app is not ready")
 	}
-	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := a.openFileDialog(runtime.OpenDialogOptions{
 		Title: "导入 ClipBox 备份",
 		Filters: []runtime.FileFilter{
 			{DisplayName: "ClipBox Backup (*.clipbox-backup)", Pattern: "*.clipbox-backup"},
@@ -760,34 +734,61 @@ func (a *App) ImportBackup() (storage.BackupStats, error) {
 		a.logErrorf("import backup dialog failed: %v", err)
 		return storage.BackupStats{}, err
 	}
+	a.historyMu.Lock()
 	stats, err := a.store.ImportBackupFile(path)
+	a.historyMu.Unlock()
 	if err != nil {
 		a.logErrorf("import backup failed: %v", err)
 		return storage.BackupStats{}, err
 	}
-	a.applyImportedRuntimeSettings()
+	applyErr := a.applyImportedRuntimeSettings()
 	if a.ctx != nil && !stats.Cancelled {
-		runtime.EventsEmit(a.ctx, "settings:updated", a.loadAppSettings())
-		runtime.EventsEmit(a.ctx, "clips:changed")
+		a.emit("settings:updated", a.loadAppSettings())
+		a.emit("clips:changed")
 	}
 	if !stats.Cancelled {
 		a.logInfof("imported backup path=%s clips=%d images=%d settings=%d skippedImages=%d", stats.Path, stats.Clips, stats.Images, stats.Settings, stats.SkippedImages)
 	}
+	if applyErr != nil {
+		return stats, fmt.Errorf("备份已导入，运行设置未完全应用：%w", applyErr)
+	}
 	return stats, nil
 }
 
-func (a *App) applyImportedRuntimeSettings() {
+func (a *App) applyImportedRuntimeSettings() error {
 	// 备份导入直接写了 settings 表，缓存必须失效重建。
 	a.invalidateSettingsCache()
 	if a.hotkeyManager != nil {
 		config := a.GetHotkeySettings()
-		_ = a.hotkeyManager.Rebind(uint32(config.Modifiers), uint32(config.KeyCode))
+		if validateHotkey(config.Modifiers, config.KeyCode) != nil {
+			config.Modifiers, config.KeyCode = hotkey.ModControl|hotkey.ModAlt, 0x56
+		}
+		if err := a.UpdateHotkey(config.Modifiers, config.KeyCode); err != nil {
+			return err
+		}
+	} else {
+		config := a.GetHotkeySettings()
+		if validateHotkey(config.Modifiers, config.KeyCode) != nil {
+			if err := a.store.SetSettings(map[string]string{"hotkey_modifiers": "3", "hotkey_key": "86"}); err != nil {
+				return err
+			}
+		}
 	}
-	_ = a.applyCurrentCleanup()
+	if err := reconcileStartAtLogin(a.loadAppSettings().StartAtLogin); err != nil {
+		return err
+	}
+	if err := a.applyCurrentCleanup(); err != nil {
+		return err
+	}
 	a.updateTrayState()
+	return nil
 }
 
 func (a *App) QuitApp() {
+	if a.resident != nil {
+		a.stopOnce.Do(func() { close(a.stopCh) })
+		return
+	}
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)
 	}
@@ -811,72 +812,4 @@ func (a *App) RepairStartAtLogin() (bool, error) {
 		a.logErrorf("start-at-login entry still disabled after repair")
 	}
 	return ok, nil
-}
-
-func (a *App) GetHotkeySettings() HotkeyConfig {
-	modStr, _ := a.store.GetSetting("hotkey_modifiers")
-	vkStr, _ := a.store.GetSetting("hotkey_key")
-	mod := hotkey.ModControl | hotkey.ModAlt
-	vk := 0x56
-	if modStr != "" {
-		if v, err := strconv.ParseUint(modStr, 10, 32); err == nil {
-			mod = int(v)
-		}
-	}
-	if vkStr != "" {
-		if v, err := strconv.ParseUint(vkStr, 10, 32); err == nil {
-			vk = int(v)
-		}
-	}
-	return HotkeyConfig{
-		Modifiers: mod,
-		KeyCode:   vk,
-		Display:   hotkeyDisplayName(mod, vk),
-	}
-}
-
-func (a *App) UpdateHotkey(modifiers, keyCode int) error {
-	if modifiers == 0 {
-		return fmt.Errorf("必须包含至少一个修饰键(Ctrl/Alt/Shift/Win)")
-	}
-	if keyCode == 0 {
-		return fmt.Errorf("必须指定一个按键")
-	}
-	if reason := reservedHotkeyReason(modifiers, keyCode); reason != "" {
-		return errors.New(reason)
-	}
-
-	err := a.hotkeyManager.Rebind(uint32(modifiers), uint32(keyCode))
-	if err != nil {
-		a.logErrorf("update hotkey failed modifiers=%d key=%d: %v", modifiers, keyCode, err)
-		if hotkey.IsHotkeyOccupiedError(err) {
-			return fmt.Errorf("%v\n当前热键保持不变，请换一个组合键后重试", err)
-		}
-		return err
-	}
-
-	_ = a.store.SetSetting("hotkey_modifiers", strconv.Itoa(modifiers))
-	_ = a.store.SetSetting("hotkey_key", strconv.Itoa(keyCode))
-	a.logInfof("updated hotkey modifiers=%d key=%d", modifiers, keyCode)
-	return nil
-}
-
-// reservedHotkeyReason returns why a combination cannot be the global hotkey,
-// or "" when it can. RegisterHotKey swallows the combination in every
-// application, so the hotkey must not equal a shortcut ClipBox itself needs:
-// the modified list shortcuts in App.tsx, and the clipboard keys it records and
-// sends when pasting.
-func reservedHotkeyReason(modifiers, keyCode int) string {
-	mods := modifiers & (hotkey.ModControl | hotkey.ModAlt | hotkey.ModShift | hotkey.ModWin)
-	digit := (keyCode >= '1' && keyCode <= '9') || (keyCode >= 0x61 && keyCode <= 0x69) // 1-9, Numpad1-9
-	switch {
-	// App.tsx 对 Ctrl、Alt、Ctrl+Alt 加数字都会触发；带 Shift 时 e.key 变成符号，带 Win 时被排除。
-	case digit && mods != 0 && mods&(hotkey.ModShift|hotkey.ModWin) == 0:
-		return "Ctrl/Alt + 数字 1~9 是 ClipBox 列表里复制或粘贴第 n 条的快捷键，不能用作唤起热键"
-	case mods == hotkey.ModControl && keyCode == 0x0D:
-		return "Ctrl + 回车 是 ClipBox 列表里只复制的快捷键，不能用作唤起热键"
-	case mods == hotkey.ModControl && (keyCode == 'C' || keyCode == 'V' || keyCode == 'X'):
-		return "Ctrl + C/V/X 是系统的复制粘贴键，ClipBox 靠它们记录和粘贴，不能用作唤起热键"
-	}
-	return ""
 }

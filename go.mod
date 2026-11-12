@@ -5,6 +5,7 @@ go 1.26.0
 toolchain go1.27.3
 
 require (
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/wailsapp/wails/v2 v2.17.1
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.1

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -18,7 +19,7 @@ var (
 // the path is empty, the file is missing, or no icon can be extracted.
 // Results (including misses) are cached per lowercased path.
 func (a *App) GetSourceIcon(exePath string) (string, error) {
-	if exePath == "" {
+	if exePath == "" || !filepath.IsAbs(exePath) || strings.HasPrefix(exePath, `\\`) {
 		return "", nil
 	}
 	key := strings.ToLower(exePath)

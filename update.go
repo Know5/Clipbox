@@ -147,7 +147,7 @@ func (a *App) DownloadUpdatePackage(downloadURL, expectedSHA256 string) (UpdateD
 	}
 
 	defaultName := updateDownloadDefaultName(downloadURL)
-	savePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	savePath, err := a.saveFileDialog(runtime.SaveDialogOptions{
 		Title:           "保存 ClipBox 更新包",
 		DefaultFilename: defaultName,
 		Filters: []runtime.FileFilter{

@@ -2,7 +2,7 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "clipbox",
   "outputfilename": "clipbox",
-  "frontend:install": "npm install",
+  "frontend:install": "npm ci",
   "frontend:build": "npm run build",
   "frontend:dev:watcher": "npm run dev",
   "frontend:dev:serverUrl": "auto",
@@ -12,7 +12,7 @@
   "info": {
     "companyName": "Know5",
     "productName": "ClipBox",
-    "productVersion": "0.3.2",
+    "productVersion": "0.4.0",
     "copyright": "Copyright 2026 Know5",
     "comments": "A lightweight Windows clipboard manager."
   }

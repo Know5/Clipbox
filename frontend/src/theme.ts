@@ -1,5 +1,5 @@
-import { GetSystemAccentColor } from "../wailsjs/go/main/App";
 import { WindowSetBackgroundColour } from "../wailsjs/runtime/runtime";
+import { GetSystemAccentColor } from "./api";
 
 /** Accent handling: the popup paints the selected row with the accent as a
  *  solid fill, so the text colour on top has to be chosen from the accent's

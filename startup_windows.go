@@ -32,6 +32,7 @@ const (
 // 结果用户的开机自启指向一个测试结束后被删除的文件，重启后静默不启动。
 // 因此测试进程一律不写用户注册表。
 func underTest() bool {
+	if hasArg("--isolated") { return true }
 	name := strings.ToLower(filepath.Base(os.Args[0]))
 	return strings.HasSuffix(name, ".test.exe") || strings.HasSuffix(name, ".test")
 }

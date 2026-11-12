@@ -57,9 +57,9 @@ function Assert-SafeChildPath {
         [string]$Child
     )
 
-    $parentFull = [System.IO.Path]::GetFullPath($Parent)
+    $parentFull = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\', '/')
     $childFull = [System.IO.Path]::GetFullPath($Child)
-    if (-not $childFull.StartsWith($parentFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $childFull.StartsWith($parentFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Refusing to modify path outside $parentFull`: $childFull"
     }
 }
@@ -72,7 +72,7 @@ function Get-RelativePath {
 
     $baseFull = [System.IO.Path]::GetFullPath($BasePath).TrimEnd('\', '/')
     $pathFull = [System.IO.Path]::GetFullPath($Path)
-    if (-not $pathFull.StartsWith($baseFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $pathFull.StartsWith($baseFull + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Path is not under base path: $pathFull"
     }
     return $pathFull.Substring($baseFull.Length).TrimStart('\', '/') -replace '\\', '/'
@@ -105,15 +105,24 @@ if ($BuildInstaller) {
 }
 
 if (-not $SkipBuild) {
-    Invoke-Checked "go test" "go" @("test", "./...")
+    Assert-SafeChildPath $RepoRoot $FrontendDir
+    # main.go embeds frontend/dist, which does not exist in a clean checkout.
+    # Build it before Go tests and reuse it for the Wails packaging step.
+    Invoke-Checked "npm ci" "npm.cmd" @("ci") $FrontendDir
+    Invoke-Checked "frontend tests" "npm.cmd" @("test") $FrontendDir
+    Invoke-Checked "frontend lint" "npm.cmd" @("run", "lint") $FrontendDir
+    Invoke-Checked "frontend formatting" "npm.cmd" @("run", "format:check") $FrontendDir
+    Invoke-Checked "TypeScript checks" "npm.cmd" @("exec", "--", "tsc", "--noEmit", "--noUnusedLocals", "--noUnusedParameters") $FrontendDir
+    Invoke-Checked "frontend build" "npm.cmd" @("run", "build") $FrontendDir
+    Invoke-Checked "go test" "go" @("test", "-count=1", "./...")
     Invoke-Checked "go vet" "go" @("vet", "./...")
     Invoke-Checked "npm audit" "npm.cmd" @("audit", "--audit-level=high") $FrontendDir
     if ($BuildInstaller) {
-        Invoke-Checked "wails build --nsis -trimpath" "wails" @("build", "--nsis", "-trimpath")
+        Invoke-Checked "wails build --nsis -s -trimpath" "wails" @("build", "--nsis", "-s", "-trimpath")
     } else {
         # -trimpath: keep the build machine's absolute paths (user name, project folder)
         # out of the shipped binary; they otherwise appear in panic traces and strings.
-        Invoke-Checked "wails build -trimpath" "wails" @("build", "-trimpath")
+        Invoke-Checked "wails build -s -trimpath" "wails" @("build", "-s", "-trimpath")
     }
 }
 
@@ -121,17 +130,26 @@ $exePath = Join-Path $BuildBinDir "clipbox.exe"
 if (-not (Test-Path -LiteralPath $exePath)) {
     throw "Build output not found: $exePath"
 }
+if (-not $SkipBuild) {
+    $previousTestExe = [Environment]::GetEnvironmentVariable("CLIPBOX_APP_EXE")
+    $env:CLIPBOX_APP_EXE = $exePath
+    try { Invoke-Checked "resident lifecycle" "go" @("test", "-count=1", "-run", "TestProductionResidentLifecycle", ".") }
+    finally { [Environment]::SetEnvironmentVariable("CLIPBOX_APP_EXE", $previousTestExe) }
+}
 
 $releaseName = "ClipBox-$version-windows-amd64"
 $releaseDir = Join-Path $DistRoot $releaseName
 $zipPath = Join-Path $DistRoot "$releaseName.zip"
 $checksumsPath = Join-Path $DistRoot "checksums.sha256"
+$packageChecksumPath = Join-Path $DistRoot "$releaseName.sha256"
 $manifestPath = Join-Path $releaseDir "release-manifest.json"
 $updateManifestPath = Join-Path $DistRoot "update-manifest.json"
 
 New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
 Assert-SafeChildPath $DistRoot $releaseDir
 Assert-SafeChildPath $DistRoot $zipPath
+Assert-SafeChildPath $DistRoot $checksumsPath
+Assert-SafeChildPath $DistRoot $packageChecksumPath
 Assert-SafeChildPath $DistRoot $updateManifestPath
 if (Test-Path -LiteralPath $releaseDir) {
     Remove-Item -LiteralPath $releaseDir -Recurse -Force
@@ -146,6 +164,10 @@ New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
 Copy-Item -LiteralPath $exePath -Destination (Join-Path $releaseDir "ClipBox.exe")
 Copy-Item -LiteralPath (Join-Path $RepoRoot "README.md") -Destination (Join-Path $releaseDir "README.md")
+foreach ($documentName in @("ARCHITECTURE.md", "QUALITY_0.4.0.md")) {
+    $documentSource = Join-Path $RepoRoot $documentName
+    if (Test-Path -LiteralPath $documentSource) { Copy-Item -LiteralPath $documentSource -Destination (Join-Path $releaseDir $documentName) }
+}
 $licenseSource = Join-Path $RepoRoot "LICENSE"
 if (Test-Path -LiteralPath $licenseSource) {
     Copy-Item -LiteralPath $licenseSource -Destination (Join-Path $releaseDir "LICENSE")
@@ -163,6 +185,10 @@ if ($IncludeInstaller) {
 $files = @()
 $files += New-FileEntry (Join-Path $releaseDir "ClipBox.exe") $releaseDir
 $files += New-FileEntry (Join-Path $releaseDir "README.md") $releaseDir
+foreach ($documentName in @("ARCHITECTURE.md", "QUALITY_0.4.0.md")) {
+    $documentCopy = Join-Path $releaseDir $documentName
+    if (Test-Path -LiteralPath $documentCopy) { $files += New-FileEntry $documentCopy $releaseDir }
+}
 $licenseCopy = Join-Path $releaseDir "LICENSE"
 if (Test-Path -LiteralPath $licenseCopy) {
     $files += New-FileEntry $licenseCopy $releaseDir
@@ -239,6 +265,7 @@ foreach ($artifact in @($zipPath, (Join-Path $releaseDir "ClipBox.exe"), $instal
     }
 }
 $checksumEntries | Set-Content -Encoding ASCII -Path $checksumsPath
+"$($zipHash.Hash.ToLowerInvariant())  $($zipItem.Name)" | Set-Content -Encoding ASCII -LiteralPath $packageChecksumPath
 
 Write-Host ""
 Write-Host "Release package created:"
@@ -246,3 +273,4 @@ Write-Host "  $zipPath"
 Write-Host "  $manifestPath"
 Write-Host "  $updateManifestPath"
 Write-Host "  $checksumsPath"
+Write-Host "  $packageChecksumPath"

@@ -1,0 +1,60 @@
+name: Windows checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Test frontend
+        working-directory: frontend
+        run: npm test
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+      - name: Check frontend formatting
+        working-directory: frontend
+        run: npm run format:check
+      - name: Check TypeScript
+        working-directory: frontend
+        run: npm exec -- tsc --noEmit --noUnusedLocals --noUnusedParameters
+      - name: Build frontend assets for Go embedding
+        working-directory: frontend
+        run: npm run build
+      - name: Test Go
+        run: go test -count=1 ./...
+      - name: Check Go
+        run: go vet ./...
+      - name: Audit frontend dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
+      - name: Check Go vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1
+      - name: Build Windows application
+        run: wails build -s -trimpath
+      - name: Test resident and UI lifecycle
+        shell: pwsh
+        run: |
+          $env:CLIPBOX_APP_EXE = (Resolve-Path 'build/bin/clipbox.exe').Path
+          go test -count=1 -run TestProductionResidentLifecycle -v .

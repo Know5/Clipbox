@@ -3,12 +3,17 @@
 import {main} from '../models';
 import {storage} from '../models';
 import {clipboard} from '../models';
+import {ocr} from '../models';
+
+export function CancelTextTask(arg1:string):Promise<void>;
 
 export function CheckForUpdates(arg1:string):Promise<main.UpdateCheckResult>;
 
 export function ClearAll():Promise<storage.ClearResult>;
 
 export function CopyAndPaste(arg1:number):Promise<void>;
+
+export function CopyTextResult(arg1:string):Promise<void>;
 
 export function CopyToClipboard(arg1:number):Promise<void>;
 
@@ -21,6 +26,8 @@ export function ExportBackup():Promise<storage.BackupStats>;
 export function ExportClip(arg1:number):Promise<main.ClipExportResult>;
 
 export function ExportDiagnostics():Promise<main.DiagnosticStats>;
+
+export function FrontendReady():Promise<void>;
 
 export function GetAppInfo():Promise<main.AppInfo>;
 
@@ -42,15 +49,23 @@ export function GetClips(arg1:number,arg2:number):Promise<Array<clipboard.ClipEn
 
 export function GetHotkeySettings():Promise<main.HotkeyConfig>;
 
-export function GetImageDataURL(arg1:number):Promise<string>;
+export function GetImageURL(arg1:number):Promise<string>;
 
 export function GetLastTargetInfo():Promise<main.TargetWindowInfo>;
+
+export function GetOCRLanguages():Promise<Array<ocr.Language>>;
+
+export function GetRuntimeInfo():Promise<main.RuntimeInfo>;
 
 export function GetSourceIcon(arg1:string):Promise<string>;
 
 export function GetStorageStats():Promise<storage.Stats>;
 
 export function GetSystemAccentColor():Promise<string>;
+
+export function GetTextToolsSettings():Promise<main.TextToolsSettings>;
+
+export function GetViewState():Promise<string>;
 
 export function GetWindowPinned():Promise<boolean>;
 
@@ -60,9 +75,13 @@ export function ImportBackup():Promise<storage.BackupStats>;
 
 export function OpenDataDir():Promise<void>;
 
+export function PatchAppSettings(arg1:Record<string, any>):Promise<main.AppSettings>;
+
 export function QuitApp():Promise<void>;
 
 export function ReadClipboardText():Promise<string>;
+
+export function RecognizeClipText(arg1:number,arg2:string,arg3:string):Promise<ocr.Result>;
 
 export function RepairStartAtLogin():Promise<boolean>;
 
@@ -71,6 +90,10 @@ export function RunAutoBackupNow():Promise<storage.BackupStats>;
 export function RunCleanupNow():Promise<storage.Stats>;
 
 export function RunStorageMaintenance():Promise<storage.MaintenanceResult>;
+
+export function SaveTextToolsSettings(arg1:main.TextToolsSettings):Promise<main.TextToolsSettings>;
+
+export function SaveViewState(arg1:string):Promise<void>;
 
 export function SearchClipPage(arg1:string,arg2:number,arg3:number):Promise<main.ClipPage>;
 
@@ -82,9 +105,13 @@ export function SearchClips(arg1:string):Promise<Array<clipboard.ClipEntry>>;
 
 export function SelectAutoBackupDir():Promise<string>;
 
+export function SetUIActivity(arg1:string,arg2:boolean):Promise<void>;
+
 export function TogglePin(arg1:number):Promise<void>;
 
 export function ToggleWindowPin():Promise<boolean>;
+
+export function TranslateText(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function UpdateAppSettings(arg1:main.AppSettings):Promise<main.AppSettings>;
 

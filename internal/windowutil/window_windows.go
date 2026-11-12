@@ -3,6 +3,8 @@ package windowutil
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -16,6 +18,7 @@ var (
 	procShowWindow               = user32.NewProc("ShowWindow")
 	procIsIconic                 = user32.NewProc("IsIconic")
 	procSendInput                = user32.NewProc("SendInput")
+	procGetAsyncKeyState         = user32.NewProc("GetAsyncKeyState")
 	procGetWindowTextLength      = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowText            = user32.NewProc("GetWindowTextW")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
@@ -133,9 +136,12 @@ func processImagePath(pid uint32) string {
 // focusPollInterval 和 focusTimeout 控制等待前台切换的节奏。
 // 用轮询代替固定 Sleep:焦点一切过去就返回,最多等 focusTimeout。
 const (
-	focusPollInterval = 5 * time.Millisecond
-	focusTimeout      = 100 * time.Millisecond
+	focusPollInterval    = 5 * time.Millisecond
+	focusTimeout         = 100 * time.Millisecond
+	pasteModifierTimeout = 500 * time.Millisecond
 )
+
+var pasteMu sync.Mutex
 
 // FocusWindow 尝试把 hwnd 切换为前台窗口,并确认切换成功。
 // 返回 false 表示超时仍未获得焦点(例如目标是管理员窗口,UIPI 阻止了切换)。
@@ -143,6 +149,8 @@ func FocusWindow(hwnd uintptr) bool {
 	if hwnd == 0 {
 		return false
 	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 
 	currThread, _, _ := procGetCurrentThreadId.Call()
 	targetThread, _, _ := procGetWindowThreadProcessId.Call(hwnd, 0)
@@ -181,9 +189,58 @@ func waitForForeground(hwnd uintptr, timeout, interval time.Duration, current fu
 	}
 }
 
-// SendCtrlV 注入 Ctrl+V 按键,返回成功注入的事件数是否等于 4。
-// 被 UIPI 阻止时 SendInput 返回 0 或少于 4。
+// PasteToWindow waits for the user's shortcut to be released before moving
+// focus. In particular, Alt+1 must not turn the injected paste into Ctrl+Alt+V
+// or send Alt's release to the target window's menu bar.
+func PasteToWindow(hwnd uintptr) error {
+	pasteMu.Lock()
+	defer pasteMu.Unlock()
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	return pasteToWindow(hwnd, pasteModifierTimeout, focusPollInterval, pasteModifiersPressed, FocusWindow, func() error {
+		if ForegroundWindow() != hwnd {
+			return fmt.Errorf("目标窗口已失去焦点，内容已在剪贴板")
+		}
+		return SendCtrlV()
+	})
+}
+
+func pasteToWindow(hwnd uintptr, timeout, interval time.Duration, modifiersPressed func() bool, focus func(uintptr) bool, send func() error) error {
+	if hwnd == 0 {
+		return fmt.Errorf("没有可用的目标窗口，内容已在剪贴板")
+	}
+	deadline := time.Now().Add(timeout)
+	for modifiersPressed() {
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("快捷键尚未释放，内容已在剪贴板，请松开按键后按 Ctrl+V")
+		}
+		time.Sleep(interval)
+	}
+	if !focus(hwnd) {
+		return fmt.Errorf("目标窗口未获得焦点，内容已在剪贴板")
+	}
+	if modifiersPressed() {
+		return fmt.Errorf("检测到新的修饰键按下，内容已在剪贴板，未发送粘贴按键")
+	}
+	return send()
+}
+
+func pasteModifiersPressed() bool {
+	for _, key := range []uintptr{0x10, 0x11, 0x12, 0x5B, 0x5C} { // Shift, Ctrl, Alt, left/right Win
+		state, _, _ := procGetAsyncKeyState.Call(key)
+		if state&0x8000 != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// SendCtrlV only injects a plain Ctrl+V. A modifier pressed after the focus
+// check aborts the operation rather than sending a different shortcut.
 func SendCtrlV() error {
+	if pasteModifiersPressed() {
+		return fmt.Errorf("修饰键尚未释放，未发送粘贴按键")
+	}
 	inputs := []input{
 		keyDown(vkControl),
 		keyDown(vKeyV),

@@ -523,7 +523,7 @@ func TestSearchUsesLiteralWildcardsAndConsistentCounts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SearchByType(%q): %v", tc.query, err)
 			}
-			if len(items) != 1 || items[0].Content != tc.want {
+			if len(items) != 1 || items[0].Preview != tc.want {
 				t.Fatalf("SearchByType(%q) = %+v, want only %q", tc.query, items, tc.want)
 			}
 

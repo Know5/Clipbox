@@ -1,17 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"clipbox/internal/clipboard"
 	"clipbox/internal/storage"
 	"clipbox/internal/windowutil"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 type AppSettings struct {
@@ -21,6 +21,7 @@ type AppSettings struct {
 	RecordSourceInfo       bool     `json:"recordSourceInfo"`
 	StartAtLogin           bool     `json:"startAtLogin"`
 	AutoPaste              bool     `json:"autoPaste"`
+	UIIdleSeconds          int      `json:"uiIdleSeconds"`
 	Theme                  string   `json:"theme"`
 	MinTextLength          int      `json:"minTextLength"`
 	MaxClips               int      `json:"maxClips"`
@@ -59,6 +60,7 @@ func defaultAppSettings() AppSettings {
 		RecordSourceInfo:       true,
 		StartAtLogin:           false,
 		AutoPaste:              false, // 对齐 Maccy:默认只复制,不自动粘贴
+		UIIdleSeconds:          60,
 		Theme:                  "dark",
 		MinTextLength:          1,
 		MaxClips:               500,
@@ -71,6 +73,12 @@ func defaultAppSettings() AppSettings {
 }
 
 func normalizeAppSettings(settings AppSettings) AppSettings {
+	if settings.UIIdleSeconds < 15 {
+		settings.UIIdleSeconds = 15
+	}
+	if settings.UIIdleSeconds > 600 {
+		settings.UIIdleSeconds = 600
+	}
 	switch settings.Theme {
 	case "dark", "light", "system":
 	default:
@@ -126,6 +134,42 @@ func (a *App) GetAppSettings() AppSettings {
 }
 
 func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
+	a.settingsWriteMu.Lock()
+	defer a.settingsWriteMu.Unlock()
+	return a.updateAppSettings(settings)
+}
+
+// Patch updates only the edited fields against the current persisted state,
+// so tray actions and another settings request cannot be overwritten by a
+// stale whole-form snapshot.
+func (a *App) PatchAppSettings(patch map[string]interface{}) (AppSettings, error) {
+	a.settingsWriteMu.Lock()
+	defer a.settingsWriteMu.Unlock()
+	current := a.loadAppSettings()
+	data, _ := json.Marshal(current)
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(data, &fields)
+	for key, value := range patch {
+		if _, exists := fields[key]; !exists || key == "startAtLoginBlocked" {
+			return current, fmt.Errorf("未知或只读设置：%s", key)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return current, err
+		}
+		fields[key] = encoded
+	}
+	data, err := json.Marshal(fields)
+	if err != nil {
+		return current, err
+	}
+	if err := json.Unmarshal(data, &current); err != nil {
+		return a.loadAppSettings(), fmt.Errorf("设置类型无效")
+	}
+	return a.updateAppSettings(current)
+}
+
+func (a *App) updateAppSettings(settings AppSettings) (AppSettings, error) {
 	prev := a.loadAppSettings()
 	settings = normalizeAppSettings(settings)
 	if err := a.saveAppSettings(settings); err != nil {
@@ -136,7 +180,7 @@ func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
 
 	// 先广播设置变更，让主题等 UI 状态立即生效，再做可能耗时的清理。
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "settings:updated", settings)
+		a.emit("settings:updated", settings)
 	}
 	a.updateTrayState()
 
@@ -148,9 +192,6 @@ func (a *App) UpdateAppSettings(settings AppSettings) (AppSettings, error) {
 	if policyChanged {
 		if err := a.applyCleanup(settings); err != nil {
 			return settings, err
-		}
-		if a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "clips:changed")
 		}
 	}
 	return settings, nil
@@ -165,7 +206,7 @@ func (a *App) loadAppSettings() AppSettings {
 	if a.settingsCache != nil {
 		cached := *a.settingsCache
 		a.settingsMu.Unlock()
-		return cached
+		return cloneAppSettings(cached)
 	}
 	a.settingsMu.Unlock()
 
@@ -175,6 +216,7 @@ func (a *App) loadAppSettings() AppSettings {
 	settings.RecordSourceInfo = a.getBoolSetting("record_source_info", settings.RecordSourceInfo)
 	settings.StartAtLogin = a.loadStartAtLoginIntent()
 	settings.AutoPaste = a.getBoolSetting("auto_paste", settings.AutoPaste)
+	settings.UIIdleSeconds = a.getIntSetting("ui_idle_seconds", settings.UIIdleSeconds)
 	settings.Theme = a.getStringSetting("theme")
 	settings.MinTextLength = a.getIntSetting("min_text_length", settings.MinTextLength)
 	settings.MaxClips = a.getIntSetting("max_clips", settings.MaxClips)
@@ -190,7 +232,7 @@ func (a *App) loadAppSettings() AppSettings {
 	settings = normalizeAppSettings(settings)
 
 	a.settingsMu.Lock()
-	cached := settings
+	cached := cloneAppSettings(settings)
 	a.settingsCache = &cached
 	a.settingsMu.Unlock()
 	return settings
@@ -207,6 +249,7 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		"record_source_info":        strconv.FormatBool(settings.RecordSourceInfo),
 		"start_at_login":            strconv.FormatBool(settings.StartAtLogin),
 		"auto_paste":                strconv.FormatBool(settings.AutoPaste),
+		"ui_idle_seconds":           strconv.Itoa(settings.UIIdleSeconds),
 		"theme":                     settings.Theme,
 		"min_text_length":           strconv.Itoa(settings.MinTextLength),
 		"max_clips":                 strconv.Itoa(settings.MaxClips),
@@ -239,10 +282,16 @@ func (a *App) saveAppSettings(settings AppSettings) error {
 		return err
 	}
 	a.settingsMu.Lock()
-	cached := settings
+	cached := cloneAppSettings(settings)
 	a.settingsCache = &cached
 	a.settingsMu.Unlock()
 	return nil
+}
+
+func cloneAppSettings(settings AppSettings) AppSettings {
+	settings.ExcludedApps = slices.Clone(settings.ExcludedApps)
+	settings.ExcludedWindowTitles = slices.Clone(settings.ExcludedWindowTitles)
+	return settings
 }
 
 // loadStartAtLoginIntent 以 DB 记录的意图为准；DB 未记录过时（老用户或全新安装）
@@ -416,14 +465,20 @@ func (a *App) applyCurrentCleanup() error {
 }
 
 func (a *App) applyCleanup(settings AppSettings) error {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	if a.store == nil {
 		return nil
 	}
-	return a.store.Cleanup(storage.CleanupPolicy{
+	result, err := a.store.CleanupWithResult(storage.CleanupPolicy{
 		MaxClips:   settings.MaxClips,
 		MaxDays:    settings.RetentionDays,
 		MaxImageMB: settings.MaxImageStorageMB,
 	})
+	if len(result.DeletedIDs) > 0 {
+		a.notifyHistoryChange(0, result.DeletedIDs)
+	}
+	return err
 }
 
 func looksSensitiveText(text string) bool {

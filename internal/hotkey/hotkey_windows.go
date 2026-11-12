@@ -6,6 +6,7 @@ import (
 	goruntime "runtime"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -17,6 +18,7 @@ var (
 	procGetMessage         = user32.NewProc("GetMessageW")
 	procPostThreadMessage  = user32.NewProc("PostThreadMessageW")
 	procGetCurrentThreadId = kernel32.NewProc("GetCurrentThreadId")
+	procPeekMessage        = user32.NewProc("PeekMessageW")
 )
 
 const (
@@ -104,6 +106,7 @@ type Manager struct {
 	newMod       uint32
 	newVK        uint32
 	rebindResult chan error
+	done         chan struct{}
 }
 
 func NewManager() *Manager {
@@ -140,7 +143,19 @@ func rebindRegistrationError(err error) error {
 }
 
 func (m *Manager) Start(modifiers, vk uint32) error {
+	m.rebindMu.Lock()
+	defer m.rebindMu.Unlock()
+	return m.start(modifiers, vk)
+}
+
+func (m *Manager) start(modifiers, vk uint32) error {
 	m.mu.Lock()
+	if m.running {
+		m.mu.Unlock()
+		return fmt.Errorf("热键已注册")
+	}
+	done := make(chan struct{})
+	m.done = done
 	m.currentMod = modifiers
 	m.currentVK = vk
 	m.running = false
@@ -149,6 +164,7 @@ func (m *Manager) Start(modifiers, vk uint32) error {
 	errCh := make(chan error, 1)
 
 	go func() {
+		defer close(done)
 		defer recoverPanic("hotkey:messageLoop")
 		goruntime.LockOSThread()
 		defer goruntime.UnlockOSThread()
@@ -164,12 +180,15 @@ func (m *Manager) Start(modifiers, vk uint32) error {
 		}()
 
 		tid, _, _ := procGetCurrentThreadId.Call()
+		// Create the message queue before reporting readiness to a caller.
+		var initial msg
+		procPeekMessage.Call(uintptr(unsafe.Pointer(&initial)), 0, 0, 0, 0)
 		m.mu.Lock()
 		m.threadID = uint32(tid)
 		m.mu.Unlock()
 
 		if err := registerHotkey(modifiers, vk); err != nil {
-			errCh <- fmt.Errorf("热键注册失败: %v\n请检查是否有其他软件占用了该热键。", err)
+			errCh <- fmt.Errorf("热键注册失败: %w", err)
 			return
 		}
 
@@ -235,7 +254,11 @@ func (m *Manager) Start(modifiers, vk uint32) error {
 		}
 	}()
 
-	return <-errCh
+	err := <-errCh
+	if err != nil {
+		<-done
+	}
+	return err
 }
 
 func (m *Manager) Rebind(modifiers, vk uint32) error {
@@ -245,26 +268,39 @@ func (m *Manager) Rebind(modifiers, vk uint32) error {
 	m.mu.Lock()
 	if !m.running || m.threadID == 0 {
 		m.mu.Unlock()
-		return fmt.Errorf("热键线程未运行")
+		return m.start(modifiers, vk)
 	}
 	m.newMod = modifiers
 	m.newVK = vk
 	tid := m.threadID
+	done := m.done
 	m.mu.Unlock()
 
 	ret, _, err := procPostThreadMessage.Call(uintptr(tid), wmRebind, 0, 0)
 	if ret == 0 {
 		return fmt.Errorf("热键线程不可用: %v", err)
 	}
-	return <-m.rebindResult
+	select {
+	case result := <-m.rebindResult:
+		return result
+	case <-done:
+		return fmt.Errorf("热键线程已退出，请重新设置")
+	}
 }
 
 func (m *Manager) Stop() {
+	m.rebindMu.Lock()
+	defer m.rebindMu.Unlock()
 	m.mu.Lock()
 	tid := m.threadID
+	done := m.done
 	m.mu.Unlock()
 
 	if tid != 0 {
 		procPostThreadMessage.Call(uintptr(tid), wmQuit, 0, 0)
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
 	}
 }

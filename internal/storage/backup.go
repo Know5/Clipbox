@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -72,6 +73,9 @@ func (s *Store) ExportBackupFile(path, appVersion string) (BackupStats, error) {
 	if path == "" {
 		return BackupStats{Cancelled: true}, nil
 	}
+	if err := s.checkBackupExportLimits(); err != nil {
+		return BackupStats{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return BackupStats{}, err
 	}
@@ -80,9 +84,15 @@ func (s *Store) ExportBackupFile(path, appVersion string) (BackupStats, error) {
 	if err != nil {
 		return BackupStats{}, err
 	}
+	if len(clips) > maxBackupClips {
+		return BackupStats{}, fmt.Errorf("%w: too many clips (%d, maximum %d)", errBackupLimit, len(clips), maxBackupClips)
+	}
 	settings, err := s.backupSettings()
 	if err != nil {
 		return BackupStats{}, err
+	}
+	if len(settings) > maxBackupSettings {
+		return BackupStats{}, fmt.Errorf("%w: too many settings (%d, maximum %d)", errBackupLimit, len(settings), maxBackupSettings)
 	}
 
 	tmp := path + ".tmp"
@@ -108,14 +118,15 @@ func (s *Store) ExportBackupFile(path, appVersion string) (BackupStats, error) {
 		AppVersion: appVersion,
 		ExportedAt: time.Now().UTC().Format(time.RFC3339),
 	}
-	if err := writeZipJSON(zipWriter, "manifest.json", manifest); err != nil {
+	if err := writeZipJSONLimited(zipWriter, "manifest.json", manifest, maxBackupManifestBytes); err != nil {
 		return BackupStats{}, err
 	}
-	if err := writeZipJSON(zipWriter, "settings.json", settings); err != nil {
+	if err := writeZipJSONLimited(zipWriter, "settings.json", settings, maxBackupSettingsBytes); err != nil {
 		return BackupStats{}, err
 	}
 
 	imageNames := map[string]bool{}
+	var imageBytes int64
 	backupClips := make([]backupClip, 0, len(clips))
 	for _, clip := range clips {
 		item := backupClip{
@@ -138,10 +149,14 @@ func (s *Store) ExportBackupFile(path, appVersion string) (BackupStats, error) {
 			stats.TextClips++
 		case "image":
 			stats.ImageClips++
-			imageName, err := writeBackupImage(zipWriter, clip.Content, clip.ID, imageNames)
+			imageName, written, err := writeBackupImage(zipWriter, clip.Content, clip.ID, imageNames, maxBackupTotalImageBytes-imageBytes)
 			if err != nil {
+				if errors.Is(err, errBackupLimit) || written > 0 {
+					return BackupStats{}, err
+				}
 				stats.SkippedImages++
 			} else if imageName != "" {
+				imageBytes += written
 				item.ImageFile = imageName
 				stats.Images++
 			}
@@ -150,7 +165,11 @@ func (s *Store) ExportBackupFile(path, appVersion string) (BackupStats, error) {
 		}
 		backupClips = append(backupClips, item)
 	}
-	if err := writeZipJSON(zipWriter, "clips.json", backupClips); err != nil {
+	writer, err := zipWriter.Create("clips.json")
+	if err != nil {
+		return BackupStats{}, err
+	}
+	if err := writeBackupClipArray(writer, backupClips, maxBackupClipsBytes); err != nil {
 		return BackupStats{}, err
 	}
 	if err := zipWriter.Close(); err != nil {
@@ -229,7 +248,7 @@ func (s *Store) ImportBackupFile(path string) (BackupStats, error) {
 	}()
 
 	for _, setting := range settings {
-		if setting.Key == "" {
+		if setting.Key == "" || setting.Key == "translation_api_key_protected" {
 			continue
 		}
 		if _, err := tx.Exec(
@@ -305,6 +324,7 @@ func (s *Store) ImportBackupFile(path string) (BackupStats, error) {
 		return BackupStats{}, err
 	}
 	committed = true
+	_ = s.RetryImageDeletes()
 	return stats, nil
 }
 
@@ -347,6 +367,11 @@ func (s *Store) backupSettings() ([]backupSetting, error) {
 		if err := rows.Scan(&setting.Key, &setting.Value); err != nil {
 			return nil, err
 		}
+		// DPAPI secrets belong to this Windows account and must not travel in
+		// portable backups or overwrite another machine's configured key.
+		if setting.Key == "translation_api_key_protected" {
+			continue
+		}
 		settings = append(settings, setting)
 	}
 	if err := rows.Err(); err != nil {
@@ -366,10 +391,12 @@ func (s *Store) saveOrUpdateTx(tx *sql.Tx, entry clipboard.ClipEntry, contentHas
 	}
 
 	var existingID int64
+	var existingType string
+	var existingContent string
 	var existingThumbnail string
 	var existingNote string
 	var existingTags string
-	err := tx.QueryRow("SELECT id, thumbnail, note, tags FROM clips WHERE content_hash = ?", contentHash).Scan(&existingID, &existingThumbnail, &existingNote, &existingTags)
+	err := tx.QueryRow("SELECT id, type, content, thumbnail, note, tags FROM clips WHERE content_hash = ?", contentHash).Scan(&existingID, &existingType, &existingContent, &existingThumbnail, &existingNote, &existingTags)
 	if err == sql.ErrNoRows {
 		_, err := tx.Exec(
 			`INSERT INTO clips (type, content, preview, thumbnail, timestamp, pinned, content_hash, source_app, source_title, source_path, note, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -395,9 +422,15 @@ func (s *Store) saveOrUpdateTx(tx *sql.Tx, entry clipboard.ClipEntry, contentHas
 		note = entry.Note
 	}
 	tags := mergeTags(existingTags, entry.Tags)
+	content := existingContent
+	var discardPaths []string
+	if entry.Type == "image" && existingType == "image" {
+		content, discardPaths = chooseImageContent(existingContent, entry.Content)
+	}
 	_, err = tx.Exec(
 		`UPDATE clips
-		 SET timestamp = CASE WHEN timestamp < ? THEN ? ELSE timestamp END,
+		 SET content = ?,
+		     timestamp = CASE WHEN timestamp < ? THEN ? ELSE timestamp END,
 		     thumbnail = ?,
 		     pinned = CASE WHEN pinned = 1 OR ? THEN 1 ELSE 0 END,
 		     source_app = CASE WHEN ? THEN ? ELSE source_app END,
@@ -406,7 +439,7 @@ func (s *Store) saveOrUpdateTx(tx *sql.Tx, entry clipboard.ClipEntry, contentHas
 		     note = ?,
 		     tags = ?
 		 WHERE id = ?`,
-		entry.Timestamp, entry.Timestamp, thumbnail, entry.Pinned,
+		content, entry.Timestamp, entry.Timestamp, thumbnail, entry.Pinned,
 		sourceFlag, entry.SourceApp,
 		sourceFlag, entry.SourceTitle,
 		sourceFlag, entry.SourcePath,
@@ -414,10 +447,10 @@ func (s *Store) saveOrUpdateTx(tx *sql.Tx, entry clipboard.ClipEntry, contentHas
 		tags,
 		existingID,
 	)
-	if entry.Type == "image" && entry.Content != "" {
-		s.removeImageFile(entry.Content)
+	if err != nil {
+		return false, err
 	}
-	return false, err
+	return false, s.queueImageDeletes(tx, discardPaths)
 }
 
 func writeZipJSON(zipWriter *zip.Writer, name string, value interface{}) error {
@@ -466,15 +499,26 @@ func findZipFile(reader *zip.Reader, name string) (*zip.File, error) {
 	return nil, fmt.Errorf("backup missing %s", name)
 }
 
-func writeBackupImage(zipWriter *zip.Writer, sourcePath string, clipID int64, used map[string]bool) (string, error) {
+func writeBackupImage(zipWriter *zip.Writer, sourcePath string, clipID int64, used map[string]bool, remainingBytes int64) (string, int64, error) {
 	if sourcePath == "" {
-		return "", os.ErrNotExist
+		return "", 0, os.ErrNotExist
 	}
 	source, err := os.Open(sourcePath)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer source.Close()
+	info, err := source.Stat()
+	if err != nil {
+		return "", 0, err
+	}
+	if info.IsDir() {
+		return "", 0, os.ErrInvalid
+	}
+	limit := min(int64(maxBackupImageBytes), remainingBytes)
+	if limit <= 0 || info.Size() > limit {
+		return "", 0, fmt.Errorf("%w: image %s exceeds the per-image or total image budget", errBackupLimit, filepath.Base(sourcePath))
+	}
 
 	name := safeBackupImageName(fmt.Sprintf("%d-%s", clipID, filepath.Base(sourcePath)))
 	for used[name] {
@@ -485,12 +529,13 @@ func writeBackupImage(zipWriter *zip.Writer, sourcePath string, clipID int64, us
 
 	writer, err := zipWriter.Create("images/" + name)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
-	if _, err := io.Copy(writer, source); err != nil {
-		return "", err
+	written, err := copyWithLimit(writer, source, limit)
+	if err != nil {
+		return "", written, err
 	}
-	return name, nil
+	return name, written, nil
 }
 
 func restoreBackupImage(file *zip.File, imageDir string, index int, remainingBytes int64) (string, int64, error) {
@@ -509,20 +554,20 @@ func restoreBackupImage(file *zip.File, imageDir string, index int, remainingByt
 	}
 	base := safeBackupImageName(filepath.Base(file.Name))
 	destPath := filepath.Join(imageDir, fmt.Sprintf("import_%d_%03d_%s", time.Now().UnixNano(), index, base))
-	dest, err := os.Create(destPath)
-	if err != nil {
-		return "", 0, err
-	}
-	defer dest.Close()
-
 	source, err := file.Open()
 	if err != nil {
 		return "", 0, err
 	}
 	defer source.Close()
-
-	written, err := copyWithLimit(dest, source, limit)
+	dest, err := os.Create(destPath)
 	if err != nil {
+		return "", 0, err
+	}
+
+	written, copyErr := copyWithLimit(dest, source, limit)
+	closeErr := dest.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		// Windows cannot remove this file while our write handle is open.
 		_ = os.Remove(destPath)
 		return "", 0, err
 	}
@@ -539,7 +584,7 @@ func copyWithLimit(dst io.Writer, src io.Reader, maxBytes int64) (int64, error) 
 		return written, err
 	}
 	if written > maxBytes {
-		return written, fmt.Errorf("backup image exceeds size limit")
+		return written, fmt.Errorf("%w: backup image exceeds size limit", errBackupLimit)
 	}
 	return written, nil
 }

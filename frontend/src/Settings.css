@@ -28,7 +28,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .back-btn:hover {
@@ -339,7 +342,9 @@
   border-radius: var(--radius-sm);
   background: var(--bg-active);
   border: 1px solid var(--border-strong);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.3), inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.3),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
   font-size: 11px;
   font-weight: 600;
   font-family: var(--font-sans);
@@ -395,7 +400,10 @@
   position: relative;
   cursor: pointer;
   flex-shrink: 0;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
 }
 
 .toggle-input::after {
@@ -535,11 +543,14 @@
 }
 
 @keyframes pulseGlow {
-  0%, 100% {
+  0%,
+  100% {
     box-shadow: 0 0 0 0 transparent;
   }
   50% {
-    box-shadow: 0 0 0 4px var(--accent-glow), 0 0 20px var(--accent-glow);
+    box-shadow:
+      0 0 0 4px var(--accent-glow),
+      0 0 20px var(--accent-glow);
   }
 }
 
@@ -562,8 +573,13 @@
 }
 
 @keyframes subtlePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
 }
 
 .recorded-keys {
@@ -613,7 +629,10 @@
   font-weight: 500;
   font-family: var(--font-sans);
   cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
   letter-spacing: 0.01em;
 }
 
@@ -692,8 +711,12 @@
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* ── Section Info ── */

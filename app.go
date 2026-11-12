@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"strconv"
 	"sync"
@@ -17,32 +18,42 @@ import (
 )
 
 type App struct {
-	ctx            context.Context
-	dataDir        string
-	logPath        string
-	store          *storage.Store
-	watcher        *clipboard.Watcher
-	hotkeyManager  *hotkey.Manager
-	trayController *tray.Controller
-	windowVisible  bool
-	windowPinned   bool // when true, window stays visible after copy
-	startHidden    bool
-	lastTarget     uintptr
-	lastToggle     time.Time
-	lastSkipNotice time.Time // 最近一次"未记录"提示的时间（限频，避免连续复制文件刷屏）
-	mu             sync.Mutex
-	settingsMu     sync.Mutex
-	settingsCache  *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
-	foregroundInfo func() windowutil.ForegroundInfo
-	windowInfo     func(hwnd uintptr) windowutil.ForegroundInfo
-	stopCh         chan struct{} // closed on shutdown to stop background loops (auto-backup ticker)
-	stopOnce       sync.Once
+	ctx               context.Context
+	resident          *resident
+	dataDir           string
+	logPath           string
+	imageSession      string
+	store             *storage.Store
+	watcher           *clipboard.Watcher
+	hotkeyManager     *hotkey.Manager
+	trayController    *tray.Controller
+	windowVisible     bool
+	windowPinned      bool // when true, window stays visible after copy
+	startHidden       bool
+	lastTarget        uintptr
+	lastToggle        time.Time
+	lastSkipNotice    time.Time // 最近一次"未记录"提示的时间（限频，避免连续复制文件刷屏）
+	mu                sync.Mutex
+	clipboardActionMu sync.Mutex
+	historyMu         sync.Mutex
+	historyChanged    func(ClipHistoryChange)
+	settingsMu        sync.Mutex
+	settingsWriteMu   sync.Mutex
+	hotkeyWriteMu     sync.Mutex
+	settingsCache     *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
+	textToolsMu       sync.Mutex
+	textTasks         map[string]context.CancelFunc
+	foregroundInfo    func() windowutil.ForegroundInfo
+	windowInfo        func(hwnd uintptr) windowutil.ForegroundInfo
+	stopCh            chan struct{} // closed on shutdown to stop background loops (auto-backup ticker)
+	stopOnce          sync.Once
 }
 
 func NewApp(dataDir string, startHidden bool) *App {
 	return &App{
 		dataDir:        dataDir,
 		logPath:        storageLogPath(dataDir),
+		imageSession:   rand.Text(),
 		startHidden:    startHidden,
 		foregroundInfo: windowutil.CurrentForegroundInfo,
 		windowInfo:     windowutil.WindowInfo,
@@ -60,7 +71,7 @@ func (a *App) startup(ctx context.Context) {
 
 	store, err := storage.NewStore(a.dataDir)
 	if err != nil {
-		runtime.LogErrorf(ctx, "Failed to init store: %v", err)
+
 		a.logErrorf("failed to init store: %v", err)
 		return
 	}
@@ -74,35 +85,28 @@ func (a *App) startup(ctx context.Context) {
 		}
 		entry = prepared
 
-		id, err := a.store.SaveOrUpdate(entry)
+		_, err := a.persistCapturedClip(entry)
 		if err != nil {
-			runtime.LogErrorf(ctx, "Failed to save/update clip: %v", err)
+
 			a.logErrorf("failed to save/update clip type=%s previewLen=%d: %v", entry.Type, len([]rune(entry.Preview)), err)
 			return
 		}
-		if err := a.applyCurrentCleanup(); err != nil {
-			runtime.LogErrorf(ctx, "Failed to cleanup clips: %v", err)
-			a.logErrorf("failed to cleanup clips: %v", err)
-		}
-		entry.ID = id
-		if entry.Type == "image" {
-			entry.Content = ""
-		}
-		// clip:new 已携带完整条目，前端会增量合并；
-		// 不再广播 clips:changed，避免把已翻页的列表重置回第一页。
-		runtime.EventsEmit(ctx, "clip:new", entry)
+	})
+	a.watcher.SetCaptureFilter(func(clipType string) bool {
+		settings := a.loadAppSettings()
+		return !settings.CapturePaused && (clipType != "image" || settings.RecordImages)
 	})
 	a.watcher.SetSkipCallback(func(reason clipboard.SkipReason) {
 		switch reason {
 		case clipboard.SkipReasonOversizedText:
 			a.logErrorf("skipped oversized clipboard text")
-			runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+			a.emit("clip:skipped", map[string]string{
 				"reason":  string(reason),
 				"message": "文本过大，已跳过记录（超过 10MB）",
 			})
 		case clipboard.SkipReasonOversizedImage:
 			a.logErrorf("skipped oversized clipboard image")
-			runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+			a.emit("clip:skipped", map[string]string{
 				"reason":  string(reason),
 				"message": "图片过大，已跳过记录（超过 50MB）",
 			})
@@ -110,7 +114,7 @@ func (a *App) startup(ctx context.Context) {
 			// 剪贴板被其它程序占着：用户会看到"复制了但列表没变"。30 秒内最多提示一次。
 			a.logErrorf("skipped clipboard update: clipboard busy")
 			if a.allowSkipNotice(30 * time.Second) {
-				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+				a.emit("clip:skipped", map[string]string{
 					"reason":  string(reason),
 					"message": "剪贴板正被其它程序占用，这一次没能记录",
 				})
@@ -120,7 +124,7 @@ func (a *App) startup(ctx context.Context) {
 			// 以前只写日志，使用者会以为"我复制了但列表里没有"；现在 10 秒内最多提示一次。
 			a.logErrorf("skipped clipboard update: %s", string(reason))
 			if a.allowSkipNotice(10 * time.Second) {
-				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+				a.emit("clip:skipped", map[string]string{
 					"reason":  string(reason),
 					"message": "这条内容不是文本或图片（如文件、网页富文本），未记录",
 				})
@@ -128,7 +132,7 @@ func (a *App) startup(ctx context.Context) {
 		case clipboard.SkipReasonReadFailed:
 			a.logErrorf("skipped clipboard update: %s", string(reason))
 			if a.allowSkipNotice(30 * time.Second) {
-				runtime.EventsEmit(ctx, "clip:skipped", map[string]string{
+				a.emit("clip:skipped", map[string]string{
 					"reason":  string(reason),
 					"message": "读取剪贴板失败，这一次没能记录",
 				})
@@ -136,9 +140,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 	})
 	if err := a.watcher.Start(); err != nil {
-		runtime.LogErrorf(ctx, "Failed to start clipboard watcher: %v", err)
+
 		a.logErrorf("failed to start clipboard watcher: %v", err)
-		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		a.startupNotice(runtime.MessageDialogOptions{
 			Type:    runtime.ErrorDialog,
 			Title:   "剪贴板监听启动失败",
 			Message: err.Error(),
@@ -161,16 +165,16 @@ func (a *App) startup(ctx context.Context) {
 	}
 	// 0.2.1 及更早允许把热键设成 Ctrl+1 这类列表快捷键，全局注册后列表里的同名快捷键失效。
 	// 存量设置改回默认并落盘；提示框异步弹出，不阻塞下面的热键注册（2026-11-06）。
-	if reason := reservedHotkeyReason(int(mod), int(vk)); reason != "" {
+	if validationErr := validateHotkey(int(mod), int(vk)); validationErr != nil {
+		reason := validationErr.Error()
 		previous := hotkeyDisplayName(int(mod), int(vk))
 		a.logErrorf("stored hotkey modifiers=%d key=%d is reserved, reset to default: %s", mod, vk, reason)
 		mod, vk = defaultMod, defaultVK
-		_ = a.store.SetSetting("hotkey_modifiers", strconv.Itoa(int(mod)))
-		_ = a.store.SetSetting("hotkey_key", strconv.Itoa(int(vk)))
+		_ = a.store.SetSettings(map[string]string{"hotkey_modifiers": strconv.Itoa(int(mod)), "hotkey_key": strconv.Itoa(int(vk))})
 		notice := fmt.Sprintf("原热键 %s 不可用：%s。\n已改回 %s，可在设置里换成其他组合。", previous, reason, hotkeyDisplayName(int(mod), int(vk)))
 		go func() {
 			defer a.recoverGoroutine("hotkeyResetNotice")
-			runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+			a.startupNotice(runtime.MessageDialogOptions{
 				Type:    runtime.InfoDialog,
 				Title:   "唤起热键已改回默认",
 				Message: notice,
@@ -181,7 +185,7 @@ func (a *App) startup(ctx context.Context) {
 	a.hotkeyManager = hotkey.NewManager()
 	if err := a.hotkeyManager.Start(mod, vk); err != nil {
 		a.logErrorf("failed to register hotkey modifiers=%d key=%d: %v", mod, vk, err)
-		runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
+		a.startupNotice(runtime.MessageDialogOptions{
 			Type:    runtime.ErrorDialog,
 			Title:   "热键注册失败",
 			Message: err.Error(),
@@ -189,8 +193,13 @@ func (a *App) startup(ctx context.Context) {
 	}
 
 	go a.superviseLoop("hotkey", func() {
-		for range a.hotkeyManager.Events {
-			a.toggleWindow()
+		for {
+			select {
+			case <-a.hotkeyManager.Events:
+				a.toggleWindow()
+			case <-a.stopCh:
+				return
+			}
 		}
 	})
 
@@ -218,6 +227,11 @@ func (a *App) startup(ctx context.Context) {
 
 func (a *App) shutdown(ctx context.Context) {
 	a.logInfof("shutdown")
+	a.textToolsMu.Lock()
+	for _, cancel := range a.textTasks {
+		cancel()
+	}
+	a.textToolsMu.Unlock()
 	a.stopOnce.Do(func() { close(a.stopCh) })
 	if a.trayController != nil {
 		a.trayController.Stop()
@@ -260,6 +274,21 @@ func (a *App) showWindowFromTray() {
 }
 
 func (a *App) showWindowInternal(captureTarget bool) {
+	if a.resident != nil {
+		target := uintptr(0)
+		if captureTarget {
+			target = windowutil.ForegroundWindow()
+		}
+		a.mu.Lock()
+		if target != 0 {
+			a.lastTarget = target
+		}
+		a.windowVisible = true
+		a.mu.Unlock()
+		a.resident.show(false)
+		a.updateTrayState()
+		return
+	}
 	if a.ctx == nil {
 		return
 	}
@@ -289,7 +318,7 @@ func (a *App) showWindowInternal(captureTarget bool) {
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
-	runtime.EventsEmit(a.ctx, "window:shown")
+	a.emit("window:shown")
 	a.updateTrayState()
 }
 
@@ -304,12 +333,20 @@ func (a *App) showFromSecondInstance() {
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
 	runtime.WindowSetAlwaysOnTop(a.ctx, true)
-	runtime.EventsEmit(a.ctx, "window:shown")
-	runtime.EventsEmit(a.ctx, "clips:changed")
+	a.emit("window:shown")
+	a.emit("clips:changed")
 	a.updateTrayState()
 }
 
 func (a *App) hideWindow() {
+	if a.resident != nil {
+		a.mu.Lock()
+		a.windowVisible = false
+		a.mu.Unlock()
+		a.resident.hide()
+		a.updateTrayState()
+		return
+	}
 	if a.ctx == nil {
 		return
 	}
@@ -318,6 +355,7 @@ func (a *App) hideWindow() {
 	a.mu.Unlock()
 	runtime.WindowSetAlwaysOnTop(a.ctx, false)
 	runtime.WindowHide(a.ctx)
+	a.emit("window:hidden")
 	a.updateTrayState()
 }
 
@@ -366,17 +404,27 @@ func (a *App) handleTrayActions(controller *tray.Controller) {
 }
 
 func (a *App) openSettingsFromTray() {
+	if a.resident != nil {
+		a.mu.Lock()
+		a.windowVisible = true
+		a.mu.Unlock()
+		a.resident.show(true)
+		a.updateTrayState()
+		return
+	}
 	if a.ctx == nil {
 		return
 	}
 	a.showWindowFromTray()
-	runtime.EventsEmit(a.ctx, "settings:open")
+	a.emit("settings:open")
 }
 
 func (a *App) toggleCapturePausedFromTray() error {
+	a.settingsWriteMu.Lock()
+	defer a.settingsWriteMu.Unlock()
 	settings := a.loadAppSettings()
 	settings.CapturePaused = !settings.CapturePaused
-	if err := a.setCapturePaused(settings.CapturePaused); err != nil {
+	if err := a.setCapturePausedLocked(settings.CapturePaused); err != nil {
 		return err
 	}
 	a.logInfof("tray set capturePaused=%v", settings.CapturePaused)
@@ -384,6 +432,12 @@ func (a *App) toggleCapturePausedFromTray() error {
 }
 
 func (a *App) setCapturePaused(paused bool) error {
+	a.settingsWriteMu.Lock()
+	defer a.settingsWriteMu.Unlock()
+	return a.setCapturePausedLocked(paused)
+}
+
+func (a *App) setCapturePausedLocked(paused bool) error {
 	if a.store == nil {
 		return nil
 	}
@@ -393,7 +447,7 @@ func (a *App) setCapturePaused(paused bool) error {
 	a.invalidateSettingsCache()
 	settings := a.loadAppSettings()
 	if a.ctx != nil {
-		runtime.EventsEmit(a.ctx, "settings:updated", settings)
+		a.emit("settings:updated", settings)
 	}
 	a.updateTrayState()
 	return nil
@@ -441,35 +495,29 @@ func (a *App) notifyPasteFailure() {
 	if !a.allowSkipNotice(10 * time.Second) {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "clip:skipped", map[string]string{
+	a.emit("clip:skipped", map[string]string{
 		"reason":  "paste-failed",
 		"message": "没能粘贴到原窗口（可能是管理员窗口），内容已在剪贴板，按 Ctrl+V 即可",
 	})
 }
 
-func (a *App) pasteToLastTarget() {
+func (a *App) pasteToLastTarget() error {
 	a.mu.Lock()
 	target := a.lastTarget
 	a.mu.Unlock()
 	a.logInfof("paste start target=%d", target)
 
-	// 内容已在剪贴板中,这里失败不影响手动粘贴,只记录日志(与 Win+V 一致,不弹提示)。
+	// 失败时保留剪贴板内容，向调用方返回错误并记录日志。
 	if target == 0 {
 		a.logErrorf("paste skipped: no target window")
-		return
+		return fmt.Errorf("没有可用的目标窗口，内容已在剪贴板")
 	}
 
-	focused := windowutil.FocusWindow(target)
-	a.logInfof("paste focus target=%d ok=%v", target, focused)
-	if !focused {
-		a.logErrorf("paste aborted: target window did not gain focus hwnd=%d", target)
-		a.notifyPasteFailure()
-		return
-	}
-	if err := windowutil.SendCtrlV(); err != nil {
+	if err := windowutil.PasteToWindow(target); err != nil {
 		a.logErrorf("paste failed: %v", err)
 		a.notifyPasteFailure()
-		return
+		return err
 	}
 	a.logInfof("paste sent ctrl+v")
+	return nil
 }

@@ -1,48 +1,42 @@
-$c = Get-Process -Name clipbox -ErrorAction Stop
-
-Write-Host ""
-Write-Host "=== Task Manager View (Private = exclusive memory) ==="
-Write-Host ""
-
-$goWS   = [math]::Round($c.WorkingSet64/1MB, 1)
-$goPriv = [math]::Round($c.PrivateMemorySize64/1MB, 1)
-Write-Host ("clipbox.exe  WS={0}MB  Private={1}MB" -f $goWS, $goPriv)
-
-$totalPriv = $c.PrivateMemorySize64
-$totalWS   = $c.WorkingSet64
-
-$kids = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($c.Id)" -ErrorAction SilentlyContinue
-foreach ($k in $kids) {
-    $gp = Get-Process -Id $k.ProcessId -ErrorAction SilentlyContinue
-    if (-not $gp) { continue }
-    $ws   = [math]::Round($gp.WorkingSet64/1MB, 1)
-    $priv = [math]::Round($gp.PrivateMemorySize64/1MB, 1)
-    Write-Host ("+-- {0}  PID={1}  WS={2}MB  Private={3}MB" -f $gp.ProcessName, $gp.Id, $ws, $priv)
-    $totalWS   += $gp.WorkingSet64
-    $totalPriv += $gp.PrivateMemorySize64
-
-    $gcs = Get-CimInstance Win32_Process -Filter "ParentProcessId = $($gp.Id)" -ErrorAction SilentlyContinue
-    foreach ($g in $gcs) {
-        $gg = Get-Process -Id $g.ProcessId -ErrorAction SilentlyContinue
-        if (-not $gg) { continue }
-        $ws2   = [math]::Round($gg.WorkingSet64/1MB, 1)
-        $priv2 = [math]::Round($gg.PrivateMemorySize64/1MB, 1)
-        Write-Host ("  +-- {0}  PID={1}  WS={2}MB  Private={3}MB" -f $gg.ProcessName, $gg.Id, $ws2, $priv2)
-        $totalWS   += $gg.WorkingSet64
-        $totalPriv += $gg.PrivateMemorySize64
+param([int]$ProcessId = 0)
+$ErrorActionPreference = 'Stop'
+$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+if ($ProcessId -eq 0) {
+    $roots = @($rows | Where-Object { $_.Name -eq 'ClipBox.exe' -and $_.CommandLine -notmatch '(?:^|\s)--ui(?:\s|$)' })
+    if ($roots.Count -ne 1) { throw '请使用 -ProcessId 指定一个正在运行的 ClipBox 后台进程。' }
+    $ProcessId = [int]$roots[0].ProcessId
+}
+$family = [Collections.Generic.HashSet[int]]::new()
+$family.Add($ProcessId) | Out-Null
+do {
+    $added = 0
+    foreach ($row in $rows) {
+        if ($family.Contains([int]$row.ParentProcessId) -and $family.Add([int]$row.ProcessId)) { $added++ }
+    }
+} while ($added -gt 0)
+$privateWorkingSets = @{}
+try {
+    Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | ForEach-Object {
+        $privateWorkingSets[[int]$_.IDProcess] = [long]$_.WorkingSetPrivate
+    }
+} catch { Write-Verbose '系统性能计数器不可用，仍返回私有提交内存和工作集。' }
+$metrics = @()
+foreach ($familyId in $family) {
+    $process = Get-Process -Id $familyId -ErrorAction SilentlyContinue
+    if ($process) {
+        $metrics += [pscustomobject]@{
+            Name = $process.ProcessName
+            PID = $familyId
+            PrivateCommitMiB = [math]::Round($process.PrivateMemorySize64 / 1MB, 1)
+            PrivateWorkingSetMiB = if ($privateWorkingSets.ContainsKey($familyId)) { [math]::Round($privateWorkingSets[$familyId] / 1MB, 1) } else { $null }
+            WorkingSetMiB = [math]::Round($process.WorkingSet64 / 1MB, 1)
+        }
     }
 }
-
-$goPrivOnly = [math]::Round($c.PrivateMemorySize64/1MB, 1)
-$wvPrivOnly = [math]::Round(($totalPriv - $c.PrivateMemorySize64)/1MB, 1)
-$totalPrivOnly = [math]::Round($totalPriv/1MB, 1)
-$totalWSOnly = [math]::Round($totalWS/1MB, 1)
-
-Write-Host ""
-Write-Host "=========================================="
-Write-Host ("  Go    Private:  {0,6:F1} MB" -f $goPrivOnly)
-Write-Host ("  WebView Priv:  {0,6:F1} MB" -f $wvPrivOnly)
-Write-Host ("  ------------------------------")
-Write-Host ("  TOTAL Private:  {0,6:F1} MB  <-- Task Manager" -f $totalPrivOnly)
-Write-Host ("  TOTAL WS:       {0,6:F1} MB  <-- incl shared" -f $totalWSOnly)
-Write-Host "=========================================="
+[pscustomobject]@{
+    RootPID = $ProcessId
+    ProcessCount = $metrics.Count
+    TotalPrivateCommitMiB = [math]::Round(($metrics | Measure-Object PrivateCommitMiB -Sum).Sum, 1)
+    TotalPrivateWorkingSetMiB = [math]::Round(($metrics | Measure-Object PrivateWorkingSetMiB -Sum).Sum, 1)
+    Processes = $metrics
+} | ConvertTo-Json -Depth 4

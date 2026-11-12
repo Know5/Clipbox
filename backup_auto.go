@@ -25,7 +25,7 @@ func (a *App) SelectAutoBackupDir() (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("app is not ready")
 	}
-	path, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+	path, err := a.openDirectoryDialog(runtime.OpenDialogOptions{
 		Title: "\u9009\u62e9\u81ea\u52a8\u5907\u4efd\u76ee\u5f55",
 	})
 	if err != nil {

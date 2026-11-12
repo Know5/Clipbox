@@ -70,6 +70,7 @@ export namespace main {
 	    recordSourceInfo: boolean;
 	    startAtLogin: boolean;
 	    autoPaste: boolean;
+	    uiIdleSeconds: number;
 	    theme: string;
 	    minTextLength: number;
 	    maxClips: number;
@@ -96,6 +97,7 @@ export namespace main {
 	        this.recordSourceInfo = source["recordSourceInfo"];
 	        this.startAtLogin = source["startAtLogin"];
 	        this.autoPaste = source["autoPaste"];
+	        this.uiIdleSeconds = source["uiIdleSeconds"];
 	        this.theme = source["theme"];
 	        this.minTextLength = source["minTextLength"];
 	        this.maxClips = source["maxClips"];
@@ -233,6 +235,24 @@ export namespace main {
 	        this.display = source["display"];
 	    }
 	}
+	export class RuntimeInfo {
+	    uiRunning: boolean;
+	    uiReady: boolean;
+	    visible: boolean;
+	    lastStartupMS: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RuntimeInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.uiRunning = source["uiRunning"];
+	        this.uiReady = source["uiReady"];
+	        this.visible = source["visible"];
+	        this.lastStartupMS = source["lastStartupMS"];
+	    }
+	}
 	export class TargetWindowInfo {
 	    available: boolean;
 	    processName: string;
@@ -249,6 +269,30 @@ export namespace main {
 	        this.processName = source["processName"];
 	        this.processPath = source["processPath"];
 	        this.title = source["title"];
+	    }
+	}
+	export class TextToolsSettings {
+	    endpoint: string;
+	    model: string;
+	    targetLanguage: string;
+	    ocrLanguage: string;
+	    hasAPIKey: boolean;
+	    apiKey?: string;
+	    clearAPIKey?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new TextToolsSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.endpoint = source["endpoint"];
+	        this.model = source["model"];
+	        this.targetLanguage = source["targetLanguage"];
+	        this.ocrLanguage = source["ocrLanguage"];
+	        this.hasAPIKey = source["hasAPIKey"];
+	        this.apiKey = source["apiKey"];
+	        this.clearAPIKey = source["clearAPIKey"];
 	    }
 	}
 	export class UpdateCheckResult {
@@ -301,6 +345,41 @@ export namespace main {
 	        this.verified = source["verified"];
 	        this.cancelled = source["cancelled"];
 	        this.message = source["message"];
+	    }
+	}
+
+}
+
+export namespace ocr {
+	
+	export class Language {
+	    tag: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Language(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = source["tag"];
+	        this.name = source["name"];
+	    }
+	}
+	export class Result {
+	    text: string;
+	    language: string;
+	    scaled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.text = source["text"];
+	        this.language = source["language"];
+	        this.scaled = source["scaled"];
 	    }
 	}
 

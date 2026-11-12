@@ -88,7 +88,7 @@ func (a *App) ExportDiagnostics() (DiagnosticStats, error) {
 		return DiagnosticStats{}, fmt.Errorf("app is not ready")
 	}
 	defaultName := "clipbox-diagnostics-" + time.Now().Format("20060102-150405") + ".zip"
-	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	path, err := a.saveFileDialog(runtime.SaveDialogOptions{
 		Title:           "导出 ClipBox 诊断包",
 		DefaultFilename: defaultName,
 		Filters: []runtime.FileFilter{

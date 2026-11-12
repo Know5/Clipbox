@@ -3,11 +3,11 @@ package main
 import (
 	"embed"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"clipbox/internal/clipboard"
 
@@ -21,84 +21,78 @@ import (
 var assets embed.FS
 
 func main() {
-	// Limit Go heap to 50 MiB for a lightweight clipboard tool.
-	// When near the limit the GC runs more aggressively and returns memory to the OS.
 	debug.SetMemoryLimit(50 * 1024 * 1024)
-
-	// Periodically force the Go runtime to return unused heap to the OS.
-	// Without this the working set can stay at peak levels even after GC.
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				println("clipbox: panic in FreeOSMemory loop:", fmt.Sprint(r))
-			}
-		}()
-		for {
-			time.Sleep(30 * time.Second)
-			debug.FreeOSMemory()
+	if bindingBuild() {
+		_ = runUI(&UIBridge{local: NewApp("", true)})
+		return
+	}
+	if hasArg("--ui") {
+		bridge, err := newUIBridge()
+		if err != nil {
+			showFatalStartupError(err)
+			return
 		}
-	}()
-
-	dataDir, dataErr := resolveDataDir()
-	if dataErr != nil {
-		// No writable location resolved — the app cannot store history.
-		// Surface it rather than silently scattering data into the CWD.
-		showFatalStartupError(dataErr)
+		if !ensureWebView2() {
+			return
+		}
+		if err := runUI(bridge); err != nil {
+			showFatalStartupError(err)
+		}
 		return
 	}
-
-	// Images are stored as raw DIB files on disk, NOT as base64 in SQLite.
-	// A single screenshot can be 8+ MB; base64 inflates that another 33 %.
-	// By keeping images as files we avoid loading them into memory on every
-	// list query and prevent SQLite bloat.
+	dataDir, err := resolveDataDir()
+	if err != nil {
+		showFatalStartupError(err)
+		return
+	}
 	imageDir := filepath.Join(dataDir, "images")
-	os.MkdirAll(imageDir, 0755)
-	clipboard.SetImageDir(imageDir)
-
-	// Let WebView2 share the system runtime (broker, GPU, network processes)
-	// instead of spawning its own. This saves ~130+ MB because multiple
-	// WebView2 apps on the same machine share those processes.
-	// Downsides: none for a clipboard tool (no sensitive browsing data).
-	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-		"--renderer-process-limit=1") // one renderer is enough for a 400×560 window
-
-	// WebView2 is required to render the UI. Detect it before wails.Run so we
-	// can point the user at the installer instead of showing a blank window.
-	if !ensureWebView2() {
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		showFatalStartupError(err)
 		return
 	}
+	clipboard.SetImageDir(imageDir)
+	if developmentBuild() {
+		app := NewApp(dataDir, hasArg("--hidden"))
+		if err := runUI(&UIBridge{local: app, direct: app}); err != nil {
+			showFatalStartupError(err)
+		}
+		return
+	}
+	if err := runResident(dataDir, hasArg("--hidden")); err != nil {
+		showFatalStartupError(err)
+	}
+}
 
-	startHidden := hasArg("--hidden")
-	app := NewApp(dataDir, startHidden)
-
-	err := wails.Run(&options.App{
+func runUI(bridge *UIBridge) error {
+	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--renderer-process-limit=1")
+	startHidden := true
+	if bridge.direct != nil {
+		startHidden = bridge.local.startHidden
+	}
+	return wails.Run(&options.App{
 		Title:             appName,
 		Width:             defaultWindowWidth,
 		Height:            defaultWindowHeight,
 		MinWidth:          340,
 		MinHeight:         420,
 		AlwaysOnTop:       true,
-		HideWindowOnClose: true,
+		HideWindowOnClose: false,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: http.HandlerFunc(bridge.local.serveImage),
 		},
 		// 与 App.css 的 --bg-primary 一致；前端切主题时再调 WindowSetBackgroundColour。
 		BackgroundColour: &options.RGBA{R: 32, G: 32, B: 32, A: 255},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		OnStartup:        bridge.startup,
+		OnShutdown:       bridge.shutdown,
+		OnBeforeClose:    bridge.beforeClose,
 		StartHidden:      startHidden,
 		Frameless:        true,
-		SingleInstanceLock: &options.SingleInstanceLock{
-			UniqueId: singleInstanceID,
-			OnSecondInstanceLaunch: func(_ options.SecondInstanceData) {
-				app.showFromSecondInstance()
-			},
-		},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
 			WebviewBrowserPath:   "",
-			WebviewUserDataPath:  "", // share system WebView2 runtime
+			WebviewUserDataPath:  filepath.Join(bridge.local.dataDir, "webview"),
 			// 2026-10-29: 原为 true(CPU 软渲染)，每次从隐藏到显示要重画整块窗口，
 			// 是"打开后空白一下才出内容"的主要嫌疑。改回 GPU 合成；若出现黑窗/闪烁，改回 true。
 			WebviewGpuIsDisabled:              false,
@@ -106,13 +100,10 @@ func main() {
 			WindowClassName:                   mainWindowClass,
 		},
 		Bind: []interface{}{
-			app,
+			bridge,
 		},
 	})
 
-	if err != nil {
-		println("Error:", err.Error())
-	}
 }
 
 func hasArg(name string) bool {
@@ -130,6 +121,19 @@ func hasArg(name string) bool {
 // finally to the executable's own folder, so a stranger's data can never
 // scatter into System32 or an arbitrary working directory.
 func resolveDataDir() (string, error) {
+	for i, arg := range os.Args[1:] {
+		if arg == "--data-dir" && i+2 < len(os.Args) {
+			dir, err := filepath.Abs(os.Args[i+2])
+			if err != nil {
+				return "", err
+			}
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return "", err
+			}
+			return dir, nil
+		}
+	}
+
 	base := ""
 	if home, err := os.UserHomeDir(); err == nil {
 		base = strings.TrimSpace(home)

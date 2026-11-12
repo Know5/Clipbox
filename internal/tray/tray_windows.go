@@ -18,6 +18,7 @@ var (
 	procDefWindowProc     = user32.NewProc("DefWindowProcW")
 	procDestroyWindow     = user32.NewProc("DestroyWindow")
 	procGetMessage        = user32.NewProc("GetMessageW")
+	procPeekMessage       = user32.NewProc("PeekMessageW")
 	procTranslateMessage  = user32.NewProc("TranslateMessage")
 	procDispatchMessage   = user32.NewProc("DispatchMessageW")
 	procPostThreadMessage = user32.NewProc("PostThreadMessageW")
@@ -95,13 +96,18 @@ type State struct {
 }
 
 type Controller struct {
-	Actions  chan Action
-	initCh   chan error
-	stopOnce sync.Once
-	stateMu  sync.RWMutex
-	state    State
-	hwnd     uintptr
-	threadID uintptr
+	Actions     chan Action
+	initCh      chan error
+	stopOnce    sync.Once
+	actionsOnce sync.Once
+	stateMu     sync.RWMutex
+	state       State
+	windowMu    sync.RWMutex
+	hwnd        uintptr
+	threadID    uintptr
+	started     bool
+	stopping    bool
+	icon        *iconResource
 }
 
 type wndClassEx struct {
@@ -167,6 +173,9 @@ func New(appName string) *Controller {
 	return &Controller{
 		Actions: make(chan Action, 16),
 		initCh:  make(chan error, 1),
+		icon: &iconResource{load: defaultIcon, destroy: func(handle uintptr) {
+			procDestroyIcon.Call(handle)
+		}},
 		state: State{
 			AppName: appName,
 		},
@@ -174,6 +183,13 @@ func New(appName string) *Controller {
 }
 
 func (c *Controller) Start() error {
+	c.windowMu.Lock()
+	if c.started || c.stopping {
+		c.windowMu.Unlock()
+		return fmt.Errorf("tray controller has already started or stopped")
+	}
+	c.started = true
+	c.windowMu.Unlock()
 	activeController = c
 	go c.messageLoop()
 	return <-c.initCh
@@ -181,12 +197,17 @@ func (c *Controller) Start() error {
 
 func (c *Controller) Stop() {
 	c.stopOnce.Do(func() {
-		if c.hwnd != 0 {
-			c.removeIcon()
-			procDestroyWindow.Call(c.hwnd)
+		c.windowMu.Lock()
+		c.stopping = true
+		hwnd, threadID, started := c.hwnd, c.threadID, c.started
+		c.windowMu.Unlock()
+		if hwnd != 0 {
+			removeIconForWindow(hwnd)
 		}
-		if c.threadID != 0 {
-			procPostThreadMessage.Call(c.threadID, wmQuit, 0, 0)
+		if threadID != 0 {
+			procPostThreadMessage.Call(threadID, wmQuit, 0, 0)
+		} else if !started {
+			c.closeResources()
 		}
 	})
 }
@@ -198,7 +219,10 @@ func (c *Controller) SetState(state State) {
 	c.stateMu.Lock()
 	c.state = state
 	c.stateMu.Unlock()
-	if c.hwnd != 0 {
+	c.windowMu.RLock()
+	hwnd, stopping := c.hwnd, c.stopping
+	c.windowMu.RUnlock()
+	if hwnd != 0 && !stopping {
 		c.modifyIcon()
 	}
 }
@@ -212,9 +236,20 @@ func (c *Controller) currentState() State {
 func (c *Controller) messageLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	defer c.closeResources()
 
+	// Ensure PostThreadMessage can see a queue before publishing the thread ID.
+	var m msg
+	procPeekMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0, 0)
 	threadID, _, _ := procGetCurrentThread.Call()
+	c.windowMu.Lock()
+	if c.stopping {
+		c.windowMu.Unlock()
+		c.initCh <- fmt.Errorf("tray controller stopped during startup")
+		return
+	}
 	c.threadID = threadID
+	c.windowMu.Unlock()
 
 	className, _ := syscall.UTF16PtrFromString("ClipBoxTrayWindow")
 	wcx := wndClassEx{
@@ -241,7 +276,14 @@ func (c *Controller) messageLoop() {
 		c.initCh <- fmt.Errorf("create tray window: %w", callError(err))
 		return
 	}
+	c.windowMu.Lock()
 	c.hwnd = hwnd
+	stopping := c.stopping
+	c.windowMu.Unlock()
+	if stopping {
+		c.initCh <- fmt.Errorf("tray controller stopped during startup")
+		return
+	}
 
 	if err := c.addIcon(); err != nil {
 		c.initCh <- err
@@ -249,15 +291,32 @@ func (c *Controller) messageLoop() {
 	}
 	c.initCh <- nil
 
-	var m msg
 	for {
 		ret, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
-		if ret == 0 {
+		if int32(ret) <= 0 {
 			return
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
 	}
+}
+
+// Native windows are destroyed by their owning thread. Icon ownership is
+// separate: shared LoadIcon handles must not be passed to DestroyIcon.
+func (c *Controller) closeResources() {
+	c.windowMu.Lock()
+	hwnd := c.hwnd
+	c.hwnd, c.threadID = 0, 0
+	c.stopping = true
+	c.windowMu.Unlock()
+	if hwnd != 0 {
+		removeIconForWindow(hwnd)
+		procDestroyWindow.Call(hwnd)
+	}
+	if c.icon != nil {
+		c.icon.close()
+	}
+	c.actionsOnce.Do(func() { close(c.Actions) })
 }
 
 func trayWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
@@ -309,6 +368,11 @@ func (c *Controller) dispatch(action Action) {
 	if action == 0 {
 		return
 	}
+	c.windowMu.RLock()
+	defer c.windowMu.RUnlock()
+	if c.stopping {
+		return
+	}
 	select {
 	case c.Actions <- action:
 	default:
@@ -331,19 +395,33 @@ func (c *Controller) modifyIcon() {
 }
 
 func (c *Controller) removeIcon() {
-	data := c.iconData(0)
+	c.windowMu.RLock()
+	hwnd := c.hwnd
+	c.windowMu.RUnlock()
+	if hwnd != 0 {
+		removeIconForWindow(hwnd)
+	}
+}
+
+func removeIconForWindow(hwnd uintptr) {
+	data := notifyIconData{size: uint32(unsafe.Sizeof(notifyIconData{})), hwnd: hwnd, id: 1}
 	procShellNotifyIcon.Call(nimDelete, uintptr(unsafe.Pointer(&data)))
 }
 
 func (c *Controller) iconData(flags uint32) notifyIconData {
 	state := c.currentState()
+	c.windowMu.RLock()
+	hwnd := c.hwnd
+	c.windowMu.RUnlock()
 	data := notifyIconData{
 		size:            uint32(unsafe.Sizeof(notifyIconData{})),
-		hwnd:            c.hwnd,
+		hwnd:            hwnd,
 		id:              1,
 		flags:           flags,
 		callbackMessage: wmTrayCallback,
-		icon:            defaultIcon(),
+	}
+	if flags&nifIcon != 0 && c.icon != nil {
+		data.icon = c.icon.get()
 	}
 	copyUTF16(data.tip[:], trayTip(state))
 	return data
@@ -352,12 +430,12 @@ func (c *Controller) iconData(flags uint32) notifyIconData {
 // defaultIcon returns the tray icon. It first tries to extract the icon that
 // wails build embedded into this executable (branded ClipBox icon), and falls
 // back to the generic Windows application icon if extraction fails.
-func defaultIcon() uintptr {
+func defaultIcon() (uintptr, bool) {
 	if icon := exeIcon(); icon != 0 {
-		return icon
+		return icon, true
 	}
 	icon, _, _ := procLoadIcon.Call(0, uintptr(idiApplication))
-	return icon
+	return icon, false
 }
 
 // exeIcon extracts the first small icon embedded in the current executable.
@@ -380,11 +458,17 @@ func exeIcon() uintptr {
 		1,
 	)
 	if ret == 0 {
+		if largeIcon != 0 {
+			procDestroyIcon.Call(largeIcon)
+		}
+		if smallIcon != 0 && smallIcon != largeIcon {
+			procDestroyIcon.Call(smallIcon)
+		}
 		return 0
 	}
 	// Prefer the small icon for the tray; fall back to the large one.
 	if smallIcon != 0 {
-		if largeIcon != 0 {
+		if largeIcon != 0 && largeIcon != smallIcon {
 			procDestroyIcon.Call(largeIcon)
 		}
 		return smallIcon
@@ -430,17 +514,20 @@ func (c *Controller) showMenu() {
 
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
-	procSetForeground.Call(c.hwnd)
+	c.windowMu.RLock()
+	hwnd := c.hwnd
+	c.windowMu.RUnlock()
+	procSetForeground.Call(hwnd)
 	id, _, _ := procTrackPopupMenu.Call(
 		menu,
 		tpmRightButton|tpmRetCmd|tpmNonotify,
 		uintptr(pt.x),
 		uintptr(pt.y),
 		0,
-		c.hwnd,
+		hwnd,
 		0,
 	)
-	procPostMessage.Call(c.hwnd, wmNull, 0, 0)
+	procPostMessage.Call(hwnd, wmNull, 0, 0)
 	if id != 0 {
 		c.dispatch(menuAction(uint16(id)))
 	}
