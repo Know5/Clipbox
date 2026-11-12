@@ -7,6 +7,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// webviewMemoryArgs are appended to the WebView2 browser command line via the
+// WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable (see main.go).
+// SpareRendererForSitePerProcess avoids a pre-spawned spare renderer process;
+// measured flags for the default set are recorded in PROGRESS.md.
+const webviewMemoryArgs = "--disable-features=SpareRendererForSitePerProcess"
+
 // A job owns the UI and its browser descendants, including processes that
 // outlive the webview host briefly while flushing caches. Application writes
 // remain in the resident and are not members of this job.

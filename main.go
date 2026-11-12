@@ -22,6 +22,12 @@ var assets embed.FS
 
 func main() {
 	debug.SetMemoryLimit(50 * 1024 * 1024)
+	// WebView2 reads WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS when the environment
+	// is created; the UI process inherits it from this process. Keep an
+	// existing value intact so a user can override or extend it.
+	if os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") == "" {
+		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webviewMemoryArgs)
+	}
 	if bindingBuild() {
 		_ = runUI(&UIBridge{local: NewApp("", true)})
 		return

@@ -1,4 +1,4 @@
-param([int]$ProcessId = 0)
+﻿param([int]$ProcessId = 0)
 $ErrorActionPreference = 'Stop'
 $rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine)
 if ($ProcessId -eq 0) {

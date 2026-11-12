@@ -256,3 +256,27 @@
 - OCR 结果归一化：删除 Windows OCR 在中文/日文字符之间及 CJK 标点周围插入的空格，保留英文、数字、换行和中英边界空格；日文长音、韩文词间空格不被破坏。
 - 验证：`go test ./...`、`go vet ./...`、前端 38 项测试、ESLint、Prettier、TypeScript 与 Vite 生产构建通过；本机中文 OCR 实测输出由“你 好 世 界 ClipBox 识 别 123”变为“你好世界 ClipBox 识别 123”。
 - 当前系统只安装中文 OCR 语言包；识别英文等语言时仍需安装对应 Windows OCR 组件并在设置中选择，否则准确率受语言包限制。真实服务商翻译输出需在配置 Key 后人工确认。
+
+## 第 10 步：2026-11-12 界面内存归因与方向决策（WebView2 参数实测）
+
+### 实测（隔离数据目录，40 文本 + 8 图片种子，界面打开 6 秒后采样；check_mem.ps1 汇总）
+
+| 场景 | 总私有提交 | WebView2 六进程 | ClipBox 两进程 |
+|---|---|---|---|
+| 0.4.0 QA 二进制，无参数 | 297.9 MiB | 189.9 MiB | ~108 MiB |
+| 默认参数（禁 SpareRenderer） | 297.5 MiB | 192.0 MiB | ~105 MiB |
+| + `--disable-gpu` | 297.1 MiB | 190.4 MiB | ~107 MiB |
+| + `--enable-low-end-device-mode` | 298.9 MiB | 192.0 MiB | ~107 MiB |
+| + `--renderer-process-limit=1` | 298.9 MiB | 190.9 MiB | ~108 MiB |
+
+- 结论：所有参数组合在噪声范围内（±2 MiB）。WebView2 六进程是 Chromium 多进程运行时成本，参数调优无法降到目标范围；QA 截图场景的 436.5 MiB 里 315 MiB 是引擎本身。
+- 对照同类：Ditto（C++ 原生）10–30 MB、Maccy（SwiftUI 原生）约 50–90 MB、CopyQ（Qt 原生）80–170 MB——≤150 MB 的都是原生 UI；Tauri 在 Windows 上同样用 WebView2，换框架不解决。ClipBox 后台本身 50.8 MiB 已是原生级。
+- 保留改动：`main.go` 接入 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 管道（UI 进程继承，用户可覆盖），默认只禁 SpareRenderer（无害保险）；不启用 `--disable-gpu`（实测无收益，且有第 1.5 步黑窗闪烁回归风险）。`check_mem.ps1` 加 UTF-8 BOM（Windows PowerShell 5.1 解析修复）。
+- 本步还提交了第 9 步及更早未提交的 0.4.0 工作树（commit 36b3b45）。
+
+### 方向决策（使用者确认）
+
+- **混合方案**：常驻进程内原生 GDI 弹窗列表（热路径，无浏览器运行时），WebView2 仅用于设置／详情／识别翻译等低频页面。
+- 目标：界面打开时总私有提交约 75–100 MiB；打开设置时短暂约 300 MiB（低频，可接受）。
+- 依据：0.4.0 的后台独占与 IPC 门面（`dispatchBackend`）不变，只换表现层；常驻进程直连 `App` 服务，无 IPC 开销，粘贴流程的隐藏等待（`__hidden` 确认）在同步隐藏下自然消失。
+- 验证方法沿用：`CLIPBOX_APP_EXE` 生命周期测试、check_mem.ps1 前后对比。
