@@ -2,13 +2,8 @@ package popup
 
 import (
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
-)
-
-var (
-	procGetPixel = syscall.NewLazyDLL("gdi32.dll").NewProc("GetPixel")
 )
 
 type stubSource struct{}
@@ -31,13 +26,6 @@ func (stubSource) Page(query, filter string, limit, offset int) ([]Row, int, err
 // response to user actions.
 func TestPopupLifecycle(t *testing.T) {
 	var pasted, pinned, deleted, details, settings, filters atomic.Int32
-	var paints atomic.Int32
-	debugPaint = func(rows, selected, firstVisible int, theme Theme) {
-		paints.Add(1)
-		t.Logf("paint#%d rows=%d selected=%d firstVisible=%d accent=%06x",
-			paints.Load(), rows, selected, firstVisible, theme.Accent)
-	}
-	defer func() { debugPaint = nil }()
 	w, err := New(stubSource{}, Callbacks{
 		Paste:     func(id int64, copyOnly bool) { pasted.Add(1) },
 		TogglePin: func(id int64) { pinned.Add(1) },
@@ -55,40 +43,22 @@ func TestPopupLifecycle(t *testing.T) {
 		Background: 0x00FFFFFF, Foreground: 0x00111111, Muted: 0x00888888,
 		Accent: 0x000078D4, AccentText: 0x00FFFFFF, Border: 0x00CCCCCC,
 	})
-	w.Show(false)
+	w.Show()
 	time.Sleep(300 * time.Millisecond) // let the first page load and paint
 	w.Refresh()
 	time.Sleep(100 * time.Millisecond)
 	w.Hide()
-	w.Show(false)
-	time.Sleep(300 * time.Millisecond) // paint pass after re-show
-
-	w.mu.Lock()
-	rows, hwnd := len(w.rows), w.hwnd
-	w.mu.Unlock()
-	dc, _, _ := procGetWindowDC.Call(hwnd)
-	background, _, _ := procGetPixel.Call(dc, 3, 3)
-	selected, _, _ := procGetPixel.Call(dc, 2, uintptr(scale(82))) // first row fill, left of the text
-	procDeleteDC.Call(dc)
-	t.Logf("measured while visible: rows=%d bg=%06x sel=%06x", rows, background&0xFFFFFF, selected&0xFFFFFF)
+	w.Show()
 	w.Hide()
 
 	w.mu.Lock()
-	visible := w.visible
+	rows, visible := len(w.rows), w.visible
 	w.mu.Unlock()
 	if rows != 3 {
 		t.Errorf("expected 3 rows loaded, got %d", rows)
 	}
 	if visible {
 		t.Error("window should be hidden after Hide")
-	}
-	// Paint must have produced the themed surface (regression: a WS_POPUP is
-	// not invalidated by ShowWindow, which once left the window black).
-	if background&0xFFFFFF != 0xFFFFFF {
-		t.Errorf("background pixel = %06x, want ffffff (paint did not run?)", background)
-	}
-	if selected&0xFFFFFF != 0x0078D4 {
-		t.Errorf("selected row pixel = %06x, want 0078d4", selected)
 	}
 	if pasted.Load() != 0 || pinned.Load() != 0 || deleted.Load() != 0 || details.Load() != 0 || settings.Load() != 0 {
 		t.Error("callbacks fired without user input")

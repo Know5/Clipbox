@@ -18,12 +18,6 @@ import (
 
 const uiIdleTimeout = 60 * time.Second
 
-const (
-	showList = iota
-	showSettings
-	showDetail
-)
-
 type resident struct {
 	app           *App
 	path          string
@@ -40,7 +34,6 @@ type resident struct {
 	releasing     bool
 	pendingShow   bool
 	settings      bool
-	detailID      int64
 	idle          *time.Timer
 	events        chan uiEvent
 	dialogs       map[string]chan ipcResponse
@@ -167,12 +160,9 @@ func (r *resident) serve(conn net.Conn) {
 		}
 		_ = json.NewEncoder(conn).Encode(response)
 	}
-	if request.Method == "__show" || request.Method == "__ping" || request.Method == "__showSettings" {
-		switch request.Method {
-		case "__show":
+	if request.Method == "__show" || request.Method == "__ping" {
+		if request.Method == "__show" {
 			r.app.showWindowFromTray()
-		case "__showSettings":
-			r.app.openSettingsFromTray()
 		}
 		respond(true, nil)
 		return
@@ -204,11 +194,6 @@ func (r *resident) serve(conn net.Conn) {
 		}
 		if settings {
 			r.emitLocked(uiEvent{Name: "settings:open"})
-		}
-		if r.detailID != 0 {
-			data, _ := json.Marshal(r.detailID)
-			r.detailID = 0
-			r.emitLocked(uiEvent{Name: "detail:open", Data: data})
 		}
 		r.mu.Unlock()
 		respond(true, nil)
@@ -333,31 +318,18 @@ func (r *resident) emitLocked(event uiEvent) {
 	}
 }
 
-func (r *resident) show(mode int) {
+func (r *resident) show(settings bool) {
 	select {
 	case <-r.app.stopCh:
 		return
 	default:
-	}
-	// Native popup: the hot path never spawns a browser process.
-	if mode == showList && r.app.popup != nil {
-		activate := !(hasArg("--isolated") && os.Getenv("CLIPBOX_TEST_NOFOCUS") == "1")
-		r.app.applyPopupTheme()
-		r.app.popup.Show(activate)
-		return
-	}
-	// Settings/detail always use the webview child; the popup yields first.
-	if r.app.popup != nil {
-		r.app.popup.Hide()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.idle != nil {
 		r.idle.Stop()
 	}
-	if mode == showSettings {
-		r.settings = true
-	}
+	r.settings = r.settings || settings
 	if r.child != nil {
 		if r.releasing {
 			r.pendingShow = true
@@ -368,11 +340,6 @@ func (r *resident) show(mode int) {
 			if r.settings {
 				r.emitLocked(uiEvent{Name: "settings:open"})
 				r.settings = false
-			}
-			if r.detailID != 0 {
-				data, _ := json.Marshal(r.detailID)
-				r.detailID = 0
-				r.emitLocked(uiEvent{Name: "detail:open", Data: data})
 			}
 		}
 		return
@@ -441,15 +408,6 @@ func (r *resident) show(mode int) {
 }
 
 func (r *resident) hide() {
-	r.mu.Lock()
-	popup := r.app.popup
-	child := r.child
-	r.mu.Unlock()
-	// Native popup hides synchronously; paste can switch focus immediately.
-	if popup != nil && child == nil {
-		popup.Hide()
-		return
-	}
 	idleSeconds := r.app.loadAppSettings().UIIdleSeconds
 	r.mu.Lock()
 	if r.idle != nil {
@@ -478,14 +436,6 @@ func (r *resident) hide() {
 	r.mu.Lock()
 	delete(r.hideWaiters, id)
 	r.mu.Unlock()
-}
-
-// showDetail hands a row over to the webview child's detail panel.
-func (r *resident) showDetail(id int64) {
-	r.mu.Lock()
-	r.detailID = id
-	r.mu.Unlock()
-	r.show(showDetail)
 }
 
 func (r *resident) releaseUI() {

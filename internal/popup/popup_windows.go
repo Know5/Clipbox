@@ -125,9 +125,8 @@ const (
 
 	esAutoHScroll = 0x0080
 
-	swShow           = 5
-	swShowNoActivate = 4
-	swHide           = 0
+	swShow = 5
+	swHide = 0
 
 	idcArrow = 32512
 
@@ -195,13 +194,6 @@ type Theme struct {
 // not call back into the popup.
 type DataSource interface {
 	Page(query, filter string, limit, offset int) (rows []Row, total int, err error)
-}
-
-// DataSourceFunc adapts a function to DataSource.
-type DataSourceFunc func(query, filter string, limit, offset int) ([]Row, int, error)
-
-func (f DataSourceFunc) Page(query, filter string, limit, offset int) ([]Row, int, error) {
-	return f(query, filter, limit, offset)
 }
 
 // Callbacks are invoked on fresh goroutines; they may call popup methods.
@@ -312,13 +304,8 @@ func (w *Window) width() int  { return scale(logicalWidth) }
 func (w *Window) height() int { return scale(logicalHeight) }
 
 // Show places the window near the cursor inside the monitor work area, makes
-// it visible and focuses the search box. activate=false shows without taking
-// focus (isolated test instances).
-func (w *Window) Show(activate bool) {
-	if activate {
-		w.send(wmPopupShow, 1, 0)
-		return
-	}
+// it visible and focuses the search box.
+func (w *Window) Show() {
 	w.send(wmPopupShow, 0, 0)
 }
 
@@ -349,18 +336,10 @@ func (w *Window) Close() {
 func (w *Window) send(msg uint32, wp, lp uintptr) {
 	w.mu.Lock()
 	hwnd := w.hwnd
-	threadID := w.threadID
 	w.mu.Unlock()
-	if hwnd == 0 {
-		return
+	if hwnd != 0 {
+		procSendMessageW.Call(hwnd, uintptr(msg), wp, lp)
 	}
-	// Window procs run on the popup thread: a SendMessage to our own thread
-	// would deadlock inside DispatchMessage. Dispatch directly instead.
-	if currentThreadID() == threadID {
-		wndProc(hwnd, msg, wp, lp)
-		return
-	}
-	procSendMessageW.Call(hwnd, uintptr(msg), wp, lp)
 }
 
 // ---- window proc ---------------------------------------------------------
@@ -396,7 +375,7 @@ func wndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		}
 		return 0
 	case wmPopupShow:
-		window.onShow(wp != 0)
+		window.onShow()
 		return 0
 	case wmPopupHide:
 		window.onHide()
@@ -444,7 +423,6 @@ func (w *Window) onCreate(hwnd uintptr) uintptr {
 	w.edit = edit
 	w.mu.Unlock()
 	subclassEdit(edit)
-	procInvalidateRect.Call(hwnd, 0, 1)
 	return 0
 }
 
@@ -463,7 +441,7 @@ func (w *Window) onDestroy() {
 	procPostQuitMessage.Call(0)
 }
 
-func (w *Window) onShow(activate bool) {
+func (w *Window) onShow() {
 	w.mu.Lock()
 	hwnd := w.hwnd
 	w.mu.Unlock()
@@ -476,18 +454,9 @@ func (w *Window) onShow(activate bool) {
 	w.confirming = false
 	edit := w.edit
 	w.mu.Unlock()
-	showFlag := uintptr(swShowNoActivate)
-	if activate {
-		showFlag = swShow
-	}
-	procShowWindow.Call(hwnd, showFlag)
-	// A WS_POPUP window is not invalidated by becoming visible: without this,
-	// WM_PAINT never fires and the surface stays black.
-	procInvalidateRect.Call(hwnd, 0, 1)
-	if activate {
-		procSetForegroundWindow.Call(hwnd)
-		procSetFocus.Call(edit)
-	}
+	procShowWindow.Call(hwnd, swShow)
+	procSetForegroundWindow.Call(hwnd)
+	procSetFocus.Call(edit)
 	w.reloadAsync()
 }
 
@@ -843,9 +812,6 @@ func (w *Window) rowAt(y int32) int {
 	return -1
 }
 
-// debugPaint is a test hook invoked on every paint with the copied state.
-var debugPaint func(rows, selected, firstVisible int, theme Theme)
-
 // ---- painting ------------------------------------------------------------
 
 func (w *Window) paint(hwnd uintptr) {
@@ -877,10 +843,6 @@ func (w *Window) paint(hwnd uintptr) {
 	confirming := w.confirming
 	w.mu.Unlock()
 
-	if debugPaint != nil {
-		debugPaint(len(rows), selected, firstVisible, theme)
-	}
-
 	procSetBkMode.Call(mem, transparentBk)
 	background, _, _ := procCreateSolidBrush.Call(uintptr(theme.Background))
 	procFillRect.Call(mem, uintptr(unsafe.Pointer(&rect)), background)
@@ -889,7 +851,7 @@ func (w *Window) paint(hwnd uintptr) {
 	// Header underline.
 	lineBrush, _, _ := procCreateSolidBrush.Call(uintptr(theme.Border))
 	lineRect := rectOf(0, scale(headerHeight), wdt, 1)
-	procFillRect.Call(mem, uintptr(unsafe.Pointer(lineRect)), lineBrush)
+	procFillRect.Call(mem, uintptr(unsafe.Pointer(&lineRect)), lineBrush)
 	procDeleteObject.Call(lineBrush)
 
 	// Toolbar: filter segments.
@@ -902,7 +864,7 @@ func (w *Window) paint(hwnd uintptr) {
 		}
 		procSetTextColor.Call(mem, uintptr(theme.Muted))
 		empty := rectOf(0, scale(headerHeight+toolbarHeight), wdt, hgt-scale(headerHeight+toolbarHeight))
-		procDrawTextW.Call(mem, utf16Ptr(text), cchAuto, uintptr(unsafe.Pointer(empty)),
+		procDrawTextW.Call(mem, utf16Ptr(text), cchAuto, uintptr(unsafe.Pointer(&empty)),
 			dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 	} else {
 		w.paintRows(mem, wdt, hgt, rows, selected, firstVisible, confirming, theme)
@@ -924,12 +886,12 @@ func (w *Window) paintToolbar(mem uintptr, wdt int, filter string, theme Theme) 
 		}
 		procSetTextColor.Call(mem, uintptr(color))
 		rect := rectOf(x, scale(headerHeight+4), scale(56), scale(toolbarHeight-8))
-		procDrawTextW.Call(mem, utf16Ptr(name), cchAuto, uintptr(unsafe.Pointer(rect)),
+		procDrawTextW.Call(mem, utf16Ptr(name), cchAuto, uintptr(unsafe.Pointer(&rect)),
 			dtCenter|dtVCenter|dtSingleLine|dtNoPrefix)
 		if selected {
 			brush, _, _ := procCreateSolidBrush.Call(uintptr(theme.Accent))
 			under := rectOf(x, scale(headerHeight+toolbarHeight-5), scale(56), 2)
-			procFillRect.Call(mem, uintptr(unsafe.Pointer(under)), brush)
+			procFillRect.Call(mem, uintptr(unsafe.Pointer(&under)), brush)
 			procDeleteObject.Call(brush)
 		}
 		x += scale(64)
@@ -967,7 +929,7 @@ func (w *Window) paintRows(mem uintptr, wdt, hgt int, rows []Row, selected, firs
 		rowRect := rectOf(0, top, wdt, h)
 		if i == selected {
 			brush, _, _ := procCreateSolidBrush.Call(uintptr(theme.Accent))
-			procFillRect.Call(mem, uintptr(unsafe.Pointer(rowRect)), brush)
+			procFillRect.Call(mem, uintptr(unsafe.Pointer(&rowRect)), brush)
 			procDeleteObject.Call(brush)
 			procSetTextColor.Call(mem, uintptr(theme.AccentText))
 		} else {
@@ -984,12 +946,12 @@ func (w *Window) paintRows(mem uintptr, wdt, hgt int, rows []Row, selected, firs
 			label = fmt.Sprintf("%d  %s", i+1, text)
 		}
 		textRect := rectOf(pad+numberPad, top, wdt-pad-numberPad-rightPad, h)
-		procDrawTextW.Call(mem, utf16Ptr(label), cchAuto, uintptr(unsafe.Pointer(textRect)),
+		procDrawTextW.Call(mem, utf16Ptr(label), cchAuto, uintptr(unsafe.Pointer(&textRect)),
 			dtSingleLine|dtVCenter|dtEndEllipsis|dtNoPrefix)
 
 		procSelectObject.Call(mem, muted)
 		timeRect := rectOf(wdt-rightPad, top, rightPad-pad, h)
-		procDrawTextW.Call(mem, utf16Ptr(formatTime(row.Timestamp)), cchAuto, uintptr(unsafe.Pointer(timeRect)),
+		procDrawTextW.Call(mem, utf16Ptr(formatTime(row.Timestamp)), cchAuto, uintptr(unsafe.Pointer(&timeRect)),
 			dtSingleLine|dtVCenter|dtRight|dtNoPrefix)
 		if row.Pinned {
 			pinBrush, _, _ := procCreateSolidBrush.Call(uintptr(theme.Accent))

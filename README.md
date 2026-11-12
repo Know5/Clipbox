@@ -95,7 +95,7 @@ wails build   # 产物：build\bin\clipbox.exe
 
 技术栈：Go + Wails v2，React + TypeScript，SQLite FTS5。
 
-生产版列表为后台进程内的原生 GDI 弹窗（无浏览器运行时，界面打开内存与后台一致约 51 MiB），设置／详情／识别翻译按需启动 WebView2 界面进程；开发模式继续支持 Wails 热更新。模块职责和生命周期见 [架构文档](ARCHITECTURE.md)。
+生产版为常驻 Go 后台加按需界面进程，开发模式继续支持 Wails 热更新。模块职责和生命周期见 [架构文档](ARCHITECTURE.md)。
 
 运行检查时先构建前端（Go 主程序会嵌入 `frontend/dist`）：
 

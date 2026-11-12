@@ -734,17 +734,6 @@ function App() {
     }
   }, []);
 
-  // Native popup handoff: the resident sends the row id when the user opens
-  // a detail from the popup (Space/i or context menu).
-  useEffect(() => {
-    const unsub = EventsOn("detail:open", (id: unknown) => {
-      if (typeof id === "number") {
-        handleOpenDetail(id).catch(console.error);
-      }
-    });
-    return unsub;
-  }, [handleOpenDetail]);
-
   const handleSaveMetadata = useCallback(async (id: number, note: string, tags: string) => {
     const request = detailRequestSeq.current;
     const updated = (await UpdateClipMetadata(id, note, tags)) as ClipEntry;
