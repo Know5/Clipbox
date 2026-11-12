@@ -44,6 +44,9 @@ func (a *App) emitHistoryChange(change ClipHistoryChange) {
 }
 
 func (a *App) notifyHistoryChange(entryID int64, deletedIDs []int64) {
+	if a.popup != nil {
+		a.popup.Refresh()
+	}
 	change, err := a.currentHistoryChange(entryID, deletedIDs)
 	if err != nil {
 		a.logErrorf("failed to read committed history change: %v", err)

@@ -34,3 +34,19 @@ func SystemAccentColor() (uint32, bool) {
 func AccentColorHex(value uint32) string {
 	return fmt.Sprintf("#%02x%02x%02x", byte(value), byte(value>>8), byte(value>>16))
 }
+
+// SystemDarkMode reports whether the user prefers dark app mode
+// (HKCU\...\Themes\Personalize\AppsUseLightTheme == 0). Missing or unreadable
+// values fall back to dark, matching the app default theme.
+func SystemDarkMode() bool {
+	key, err := registry.OpenKey(registry.CURRENT_USER, `Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`, registry.QUERY_VALUE)
+	if err != nil {
+		return true
+	}
+	defer key.Close()
+	value, _, err := key.GetIntegerValue("AppsUseLightTheme")
+	if err != nil {
+		return true
+	}
+	return value == 0
+}

@@ -105,12 +105,33 @@ func TestProductionResidentLifecycle(t *testing.T) {
 		}
 		t.Fatalf("unexpected UI lifecycle state: %+v", info())
 	}
+	waitPopup := func(wantVisible bool) {
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			state := info()
+			if state.Visible == wantVisible && !state.UIRunning {
+				return
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
+		t.Fatalf("unexpected popup state: %+v", info())
+	}
 	cycles := 3
 	if requested, err := strconv.Atoi(os.Getenv("CLIPBOX_LIFECYCLE_CYCLES")); err == nil && requested > 0 && requested <= 100 {
 		cycles = requested
 	}
 	for cycle := 0; cycle < cycles; cycle++ {
+		// Native popup: show/hide without any child process.
 		if _, err := call("__show"); err != nil {
+			t.Fatal(err)
+		}
+		waitPopup(true)
+		if _, err := call("HideWindow"); err != nil {
+			t.Fatal(err)
+		}
+		waitPopup(false)
+		// Settings handoff: the webview child owns the remaining lifecycle.
+		if _, err := call("__showSettings"); err != nil {
 			t.Fatal(err)
 		}
 		wait(true, true)
@@ -135,7 +156,7 @@ func TestProductionResidentLifecycle(t *testing.T) {
 	if _, err := call("__show"); err != nil {
 		t.Fatal(err)
 	}
-	wait(true, true)
+	waitPopup(true)
 	if _, err := call("QuitApp"); err != nil {
 		t.Logf("shutdown closed the IPC connection: %v", err)
 	}

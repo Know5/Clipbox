@@ -10,6 +10,7 @@ import (
 
 	"clipbox/internal/clipboard"
 	"clipbox/internal/hotkey"
+	"clipbox/internal/popup"
 	"clipbox/internal/storage"
 	"clipbox/internal/tray"
 	"clipbox/internal/windowutil"
@@ -20,6 +21,7 @@ import (
 type App struct {
 	ctx               context.Context
 	resident          *resident
+	popup             *popup.Window // native list popup (production only; nil in dev/UI modes)
 	dataDir           string
 	logPath           string
 	imageSession      string
@@ -76,6 +78,42 @@ func (a *App) startup(ctx context.Context) {
 		return
 	}
 	a.store = store
+
+	// Native list popup: production resident only. The webview child remains
+	// for settings, detail and text tools.
+	if a.resident != nil {
+		p, err := popup.New(popup.DataSourceFunc(a.popupPage), popup.Callbacks{
+			Paste: func(id int64, copyOnly bool) {
+				if copyOnly {
+					if err := a.CopyToClipboard(id); err != nil {
+						a.logErrorf("popup copy failed id=%d: %v", id, err)
+					}
+					return
+				}
+				if err := a.CopyAndPaste(id); err != nil {
+					a.logErrorf("popup paste failed id=%d: %v", id, err)
+				}
+			},
+			TogglePin: func(id int64) {
+				if err := a.TogglePin(id); err != nil {
+					a.logErrorf("popup toggle pin failed id=%d: %v", id, err)
+				}
+			},
+			Delete: func(id int64) {
+				if err := a.DeleteClip(id); err != nil {
+					a.logErrorf("popup delete failed id=%d: %v", id, err)
+				}
+			},
+			Details:  a.openDetailFromPopup,
+			Settings: a.openSettingsFromTray,
+		})
+		if err != nil {
+			a.logErrorf("popup init failed: %v", err)
+		} else {
+			a.popup = p
+			a.applyPopupTheme()
+		}
+	}
 
 	a.watcher = clipboard.NewWatcher(func(entry clipboard.ClipEntry) {
 		prepared, ok := a.prepareClipEntry(entry)
@@ -233,6 +271,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	a.textToolsMu.Unlock()
 	a.stopOnce.Do(func() { close(a.stopCh) })
+	if a.popup != nil {
+		a.popup.Close()
+	}
 	if a.trayController != nil {
 		a.trayController.Stop()
 	}
@@ -285,7 +326,7 @@ func (a *App) showWindowInternal(captureTarget bool) {
 		}
 		a.windowVisible = true
 		a.mu.Unlock()
-		a.resident.show(false)
+		a.resident.show(showList)
 		a.updateTrayState()
 		return
 	}
@@ -408,7 +449,7 @@ func (a *App) openSettingsFromTray() {
 		a.mu.Lock()
 		a.windowVisible = true
 		a.mu.Unlock()
-		a.resident.show(true)
+		a.resident.show(showSettings)
 		a.updateTrayState()
 		return
 	}
@@ -457,6 +498,7 @@ func (a *App) invalidateSettingsCache() {
 	a.settingsMu.Lock()
 	a.settingsCache = nil
 	a.settingsMu.Unlock()
+	a.applyPopupTheme()
 }
 
 func (a *App) updateTrayState() {
