@@ -216,6 +216,36 @@ describe("live history list", () => {
     expect(row.classList.contains("pinned")).toBe(false);
   });
 
+  it("pastes on row click even with a lingering selection outside the row", async () => {
+    backendItems = [clip(2), clip(1)];
+    backendTotal = 2;
+    render(<App />);
+    const row = (await screen.findByText("row-1")).closest('[role="option"]');
+    // 回归：搜索框/其他区域的选区曾吞掉行单击（防拖选守卫误伤）。
+    const status = screen.getByText(/已加载/);
+    const range = document.createRange();
+    range.selectNodeContents(status);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.click(row);
+    await waitFor(() => expect(mocks.paste).toHaveBeenCalledWith(1));
+  });
+
+  it("does not paste while drag-selecting text inside the row", async () => {
+    backendItems = [clip(2), clip(1)];
+    backendTotal = 2;
+    render(<App />);
+    const row = (await screen.findByText("row-1")).closest('[role="option"]');
+    const range = document.createRange();
+    range.selectNodeContents(row.querySelector(".clip-preview"));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.click(row);
+    expect(mocks.paste).not.toHaveBeenCalled();
+  });
+
   it("does not restore a manually deleted record from an earlier refresh", async () => {
     backendItems = [clip(2), clip(1)];
     backendTotal = 2;

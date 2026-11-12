@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { GetSourceIcon } from "./api";
 import type { ClipEntry } from "./clipHistory";
 export interface CopyFeedback {
@@ -159,10 +159,15 @@ const ClipItem = memo(function ClipItem({
   onDelete,
   onDetail,
 }: ClipItemProps) {
-  // 单击 = 复制并粘贴回原输入框（与回车一致）。拖选文字时不触发。
+  const rowRef = useRef<HTMLDivElement>(null);
+  // 单击 = 复制并粘贴回原输入框（与回车一致）。只有拖选本行文字时不触发；
+  // 搜索框或其他位置的选区（如拖动列表留下的选区）不再吞掉单击。
   const handleClick = () => {
     const selection = window.getSelection();
-    if (selection && selection.toString().length > 0) return;
+    if (selection && selection.toString().length > 0) {
+      const anchor = selection.anchorNode;
+      if (anchor && rowRef.current?.contains(anchor)) return;
+    }
     onDouble(clip.id);
   };
 
@@ -177,6 +182,7 @@ const ClipItem = memo(function ClipItem({
 
   return (
     <div
+      ref={rowRef}
       data-clip-id={clip.id}
       role="option"
       aria-selected={selected}
