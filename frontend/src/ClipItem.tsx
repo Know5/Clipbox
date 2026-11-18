@@ -53,10 +53,7 @@ function loadSourceIcon(path: string): Promise<string> {
         sourceIconCache.delete(sourceIconCache.keys().next().value as string);
       return value;
     })
-    .catch(() => {
-      sourceIconCache.set(path, "");
-      return "";
-    })
+    .catch(() => "")
     .finally(() => sourceIconPending.delete(path));
   sourceIconPending.set(path, request);
   return request;

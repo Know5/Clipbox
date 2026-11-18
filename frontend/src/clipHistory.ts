@@ -1,17 +1,17 @@
-export interface ClipEntry {
-  id: number;
-  type: string;
-  content: string;
-  preview: string;
-  thumbnail?: string;
-  timestamp: number;
-  pinned: boolean;
-  sourceApp?: string;
-  sourceTitle?: string;
-  sourcePath?: string;
-  note?: string;
-  tags?: string;
-}
+import type { clipboard, main, storage } from "../wailsjs/go/models";
+
+export type ClipEntry = clipboard.ClipEntry;
+
+export type ClipPage = Partial<Pick<main.ClipPage, "limit" | "offset">> &
+  Pick<main.ClipPage, "items" | "total" | "hasMore">;
+
+export type ClipTag = main.ClipTag;
+
+export type ClipExportResult = Partial<main.ClipExportResult>;
+
+export type ClearResult = Partial<Omit<storage.ClearResult, "convertValues" | "stats">> & {
+  stats?: Partial<storage.Stats>;
+};
 
 export interface ClipHistoryChange {
   entry: ClipEntry | null;

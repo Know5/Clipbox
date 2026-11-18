@@ -151,7 +151,7 @@
 
 ### 现象与证据
 - 11-06 部署 0.3.1 之前之后都没有新的登录启动记录(`%USERPROFILE%\.clipbox\clipbox.log` 最后一次 `startup ... startHidden=true` 是 11-06 的手动运行)。
-- Run 值正确:`"C:\Users\QGS\AppData\Local\Programs\ClipBox\ClipBox.exe" --hidden`,exe 存在且为 0.3.0。
+- Run 值正确:`"%LOCALAPPDATA%\Programs\ClipBox\ClipBox.exe" --hidden`,exe 存在且为 0.3.0。
 - 真正原因:Windows 自己的启动项开关是关的。
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run\ClipBox` = `03 00 00 00 CA FE 4F 0E 0D 5D DD 01`,首字节 `0x03` = 已禁用,时间戳 **2026-10-16 09:24:14**(本地)。
   也就是说从 10-16 起,无论 Run 值怎么修,Windows 每次登录都直接跳过 ClipBox;开发期一直手动启动,所以没人发现。不是 0.3.0 的回归,也不是自启逻辑写错。
@@ -287,3 +287,10 @@
 - 部署后使用者反馈：外观与交互不符合使用习惯（“太丑、难用”），按预案回退到 WebView2 列表界面。
 - 0.4.2 = 0.4.0 界面 + 单击粘贴修复（行外选区不再吞掉行单击，commit 3bfb17a）+ 版本号。弹窗代码保留在仓库（internal/popup，未接线），git 历史可随时找回接线版本；如再次启用，先按使用者反馈重做外观与交互，再接回。
 - 待定：界面内存问题（436.5 MiB 仅界面打开时，隐藏回收后 57 MiB）在保留 WebView2 界面的前提下暂无根治手段，接受现状或后续再议。
+
+## 第 12 步：2026-11-18 全面优化收口与死代码清理（0.4.3）
+
+- 修复与并发加固：`main.go` 合并 WebView2 内存参数且不再覆盖用户环境配置；`resident_windows.go` / `app.go` 完善 UI 启动失败状态回滚、`hide()` 清理 `pendingShow` 与 `settings`、退出等待 `childDone`、`beforeClose` 异步隐藏防卡死；`backup_auto.go` 与 `api.go` 用 `backupMu`、`settingsWriteMu -> historyMu` 串行化备份/导入与运行时设置恢复。
+- 性能与检索优化：`internal/clipboard` 使用 `GetClipboardSequenceNumber` 去重自写事件、将剪贴板处理移出 `WndProc` 到工作协程并使用 `png.BestSpeed` 缩略图；图片捕获前直接按内存 `RawImage` 哈希提前去重复用已有磁盘文件；`internal/storage` 支持多词 `AND`、FTS5 + 短词 `LIKE` 混合检索与 `COUNT(*) OVER()` 单查询分页、批量 `GetImagePathsByIDs`、`Stats()` 单句聚合；`HEAD .png` 仅校验 DIB 头部；缓存 `GetOCRLanguages`。
+- 前端、硬化与死代码清理：`App.tsx` 消除冷启动带筛选双请求、取消鼠标悬停 `scrollIntoView`、`Settings.tsx` 同步重开标签页、`useSettingsController` 移除渲染/updater 副作用并拆出 `useClipDetail` / `useClipShortcuts` / `useThemeSync` / `ContextMenu` / `ToolbarPopovers`；清除 UI 子进程环境变量 `CLIPBOX_UI_TOKEN`、增加 5 MiB 日志轮转、图标缓存改 LRU；彻底清理未接线的 `internal/popup` 与不可达死函数（`showFromSecondInstance`、`legacyBMP`、`ftsMatchQuery`）。
+- 工具链与交付（0.4.3）：将 `go.mod` 与 CI `check.yml` 的 Go 工具链升级至 `go1.27.4` 修复标准库漏洞 `GO-2026-6859`（`govulncheck ./...` 零漏洞），`metadata.go` 与 `wails.json` 升级至 `0.4.3`，新增覆盖冷启动恢复、键盘滚动作用域、标签同步、搜索优化、日志轮转与图标 LRU 的回归测试。

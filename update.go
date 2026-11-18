@@ -279,7 +279,11 @@ func downloadUpdateToPath(downloadURL, targetPath, expectedSHA256 string) (Updat
 		return result, err
 	}
 	cleanupTemp = false
-	result.Message = "下载完成"
+	if result.Verified {
+		result.Message = "下载完成（SHA256 已校验）"
+	} else {
+		result.Message = "下载完成（未提供 SHA256，未校验）"
+	}
 	return result, nil
 }
 

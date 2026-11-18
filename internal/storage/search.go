@@ -197,6 +197,45 @@ func (s *Store) CountSearchByTypeAndTag(query, clipType, tag string) (int, error
 	return count, err
 }
 
+func (s *Store) SearchPage(query string, limit, offset int) ([]clipboard.ClipEntry, int, error) {
+	return s.SearchPageByTypeAndTag(query, "text", "", limit, offset)
+}
+
+func (s *Store) SearchPageByType(query, clipType string, limit, offset int) ([]clipboard.ClipEntry, int, error) {
+	return s.SearchPageByTypeAndTag(query, clipType, "", limit, offset)
+}
+
+func (s *Store) SearchPageByTypeAndTag(query, clipType, tag string, limit, offset int) ([]clipboard.ClipEntry, int, error) {
+	tag = normalizeTagFilter(tag)
+	if entries, total, ok, err := s.searchFTSPage(query, clipType, tag, limit, offset); ok {
+		return entries, total, err
+	}
+	clipType = normalizeClipType(clipType)
+	limit, offset = normalizePage(limit, offset)
+	where, args := searchWhere(query, clipType)
+	where, args = appendTagWhere(where, args, tag)
+	args = append(args, limit, offset)
+	rows, err := s.db.Query(
+		`SELECT `+clipListColumns+`, COUNT(*) OVER() AS total_count
+		 FROM clips `+where+`
+		 ORDER BY pinned DESC, timestamp DESC
+		 LIMIT ? OFFSET ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	entries, total, err := scanClipPageRows(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(entries) == 0 && offset > 0 {
+		total, err = s.CountSearchByTypeAndTag(query, clipType, tag)
+	}
+	return entries, total, err
+}
+
 func (s *Store) searchFTS(query, clipType, tag string, limit, offset int) ([]clipboard.ClipEntry, bool, error) {
 	if !s.shouldUseFTS(query) {
 		return nil, false, nil
@@ -222,6 +261,60 @@ func (s *Store) searchFTS(query, clipType, tag string, limit, offset int) ([]cli
 	defer rows.Close()
 	entries, err := scanClipRows(rows)
 	return entries, true, err
+}
+
+func (s *Store) searchFTSPage(query, clipType, tag string, limit, offset int) ([]clipboard.ClipEntry, int, bool, error) {
+	if !s.shouldUseFTS(query) {
+		return nil, 0, false, nil
+	}
+	limit, offset = normalizePage(limit, offset)
+	where, args, ok := ftsWhere(query, clipType, tag)
+	if !ok {
+		return nil, 0, false, nil
+	}
+	args = append(args, limit, offset)
+	rows, err := s.db.Query(
+		`SELECT `+qualifiedClipColumns("c")+`, COUNT(*) OVER() AS total_count
+		   FROM clips c
+		   JOIN clips_fts ON clips_fts.rowid = c.id
+		  WHERE `+where+`
+		  ORDER BY c.pinned DESC, c.timestamp DESC
+		  LIMIT ? OFFSET ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, 0, false, nil
+	}
+	defer rows.Close()
+	entries, total, err := scanClipPageRows(rows)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	if len(entries) == 0 && offset > 0 {
+		total, err = s.CountSearchByTypeAndTag(query, clipType, tag)
+	}
+	return entries, total, true, err
+}
+
+func scanClipPageRows(rows *sql.Rows) ([]clipboard.ClipEntry, int, error) {
+	var entries []clipboard.ClipEntry
+	total := 0
+	for rows.Next() {
+		var e clipboard.ClipEntry
+		var count int
+		if err := rows.Scan(&e.ID, &e.Type, &e.Content, &e.Preview, &e.Thumbnail, &e.Timestamp, &e.Pinned, &e.SourceApp, &e.SourceTitle, &e.SourcePath, &e.Note, &e.Tags, &count); err != nil {
+			return nil, 0, err
+		}
+		if e.Type == "image" {
+			e.Content = ""
+		}
+		total = count
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return entries, total, nil
 }
 
 func (s *Store) countSearchFTS(query, clipType, tag string) (int, bool, error) {
@@ -261,20 +354,53 @@ func (s *Store) queryTagRowsFTS(query, clipType string) (*sql.Rows, error) {
 }
 
 func (s *Store) shouldUseFTS(query string) bool {
-	return s.ftsAvailable && ftsQueryLongEnough(query)
+	if !s.ftsAvailable {
+		return false
+	}
+	ftsTokens, _ := partitionSearchTokens(query)
+	return len(ftsTokens) > 0
+}
+
+func splitSearchTokens(query string) []string {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return []string{query}
+	}
+	return strings.Fields(trimmed)
+}
+
+func partitionSearchTokens(query string) (ftsTokens, shortTokens []string) {
+	for _, token := range splitSearchTokens(query) {
+		if len([]rune(token)) >= 3 {
+			ftsTokens = append(ftsTokens, token)
+		} else if token != "" {
+			shortTokens = append(shortTokens, token)
+		}
+	}
+	return ftsTokens, shortTokens
 }
 
 func ftsWhere(query, clipType, tag string) (string, []interface{}, bool) {
-	match, ok := ftsMatchQuery(query)
-	if !ok {
+	ftsTokens, shortTokens := partitionSearchTokens(query)
+	if len(ftsTokens) == 0 {
 		return "", nil, false
 	}
+	quoted := make([]string, len(ftsTokens))
+	for i, token := range ftsTokens {
+		quoted[i] = `"` + strings.ReplaceAll(token, `"`, `""`) + `"`
+	}
 	conditions := []string{"clips_fts MATCH ?"}
-	args := []interface{}{match}
-	switch normalizeClipType(clipType) {
+	args := []interface{}{strings.Join(quoted, " ")}
+	normalizedType := normalizeClipType(clipType)
+	switch normalizedType {
 	case "text", "image":
 		conditions = append(conditions, "c.type = ?")
-		args = append(args, normalizeClipType(clipType))
+		args = append(args, normalizedType)
+	}
+	for _, token := range shortTokens {
+		clause, tokenArgs := tokenLikeClause("c.", normalizedType, token)
+		conditions = append(conditions, clause)
+		args = append(args, tokenArgs...)
 	}
 	if tag = normalizeTagFilter(tag); tag != "" {
 		conditions = append(conditions, `instr(', ' || clipbox_tag_key(c.tags) || ', ', ?) > 0`)
@@ -283,31 +409,47 @@ func ftsWhere(query, clipType, tag string) (string, []interface{}, bool) {
 	return strings.Join(conditions, " AND "), args, true
 }
 
-func ftsMatchQuery(query string) (string, bool) {
-	query = strings.TrimSpace(query)
-	if !ftsQueryLongEnough(query) {
-		return "", false
-	}
-	query = strings.ReplaceAll(query, `"`, `""`)
-	return `"` + query + `"`, true
-}
-
-func ftsQueryLongEnough(query string) bool {
-	return len([]rune(strings.TrimSpace(query))) >= 3
-}
-
 func searchWhere(query, clipType string) (string, []interface{}) {
-	pattern := likePattern(query)
+	normalizedType := normalizeClipType(clipType)
+	var conditions []string
+	var args []interface{}
+	switch normalizedType {
+	case "text", "image":
+		conditions = append(conditions, "type = ?")
+		args = append(args, normalizedType)
+	}
+	for _, token := range splitSearchTokens(query) {
+		clause, tokenArgs := tokenLikeClause("", normalizedType, token)
+		conditions = append(conditions, clause)
+		args = append(args, tokenArgs...)
+	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
+func tokenLikeClause(alias, clipType, token string) (string, []interface{}) {
+	pattern := likePattern(token)
 	const escapeClause = ` ESCAPE '\'`
-	switch normalizeClipType(clipType) {
+	col := func(name string) string { return alias + name }
+	switch clipType {
 	case "text":
-		return `WHERE type = 'text' AND (content LIKE ?` + escapeClause + ` OR source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
+		return "(" + col("content") + ` LIKE ?` + escapeClause +
+				" OR " + col("source_app") + ` LIKE ?` + escapeClause +
+				" OR " + col("source_title") + ` LIKE ?` + escapeClause +
+				" OR " + col("note") + ` LIKE ?` + escapeClause +
+				" OR " + col("tags") + ` LIKE ?` + escapeClause + ")",
 			[]interface{}{pattern, pattern, pattern, pattern, pattern}
 	case "image":
-		return `WHERE type = 'image' AND (source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
+		return "(" + col("source_app") + ` LIKE ?` + escapeClause +
+				" OR " + col("source_title") + ` LIKE ?` + escapeClause +
+				" OR " + col("note") + ` LIKE ?` + escapeClause +
+				" OR " + col("tags") + ` LIKE ?` + escapeClause + ")",
 			[]interface{}{pattern, pattern, pattern, pattern}
 	default:
-		return `WHERE ((type = 'text' AND content LIKE ?` + escapeClause + `) OR source_app LIKE ?` + escapeClause + ` OR source_title LIKE ?` + escapeClause + ` OR note LIKE ?` + escapeClause + ` OR tags LIKE ?` + escapeClause + `)`,
+		return "((" + col("type") + ` = 'text' AND ` + col("content") + ` LIKE ?` + escapeClause + ")" +
+				" OR " + col("source_app") + ` LIKE ?` + escapeClause +
+				" OR " + col("source_title") + ` LIKE ?` + escapeClause +
+				" OR " + col("note") + ` LIKE ?` + escapeClause +
+				" OR " + col("tags") + ` LIKE ?` + escapeClause + ")",
 			[]interface{}{pattern, pattern, pattern, pattern, pattern}
 	}
 }

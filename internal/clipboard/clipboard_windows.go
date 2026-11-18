@@ -46,6 +46,7 @@ var (
 	procPostThreadMessageW            = user32.NewProc("PostThreadMessageW")
 	procGetWindowThreadProcessId      = user32.NewProc("GetWindowThreadProcessId")
 	procRegisterClipboardFormat       = user32.NewProc("RegisterClipboardFormatW")
+	procGetClipboardSequenceNumber    = user32.NewProc("GetClipboardSequenceNumber")
 )
 
 const (
@@ -70,6 +71,8 @@ type ClipEntry struct {
 	SourcePath  string `json:"sourcePath,omitempty"`
 	Note        string `json:"note,omitempty"`
 	Tags        string `json:"tags,omitempty"`
+	RawImage    []byte `json:"-"`
+	ContentHash string `json:"-"`
 }
 
 type OnClipChangeFunc func(entry ClipEntry)
@@ -78,8 +81,11 @@ type OnClipChangeFunc func(entry ClipEntry)
 var imageDir string
 
 // selfWrite is set to 1 when the app itself is writing to the clipboard,
-// so the watcher should ignore the next update(s).
-var selfWrite int32
+// so the watcher ignores the next update(s) matching selfWriteSeq.
+var (
+	selfWrite    int32
+	selfWriteSeq uint32
+)
 
 // SkipReason 解释为什么一次剪贴板更新没有产生可记录条目。
 type SkipReason string
@@ -112,6 +118,18 @@ func MarkSelfWrite() {
 // write failed before Windows could emit a clipboard update.
 func ClearSelfWrite() {
 	atomic.StoreInt32(&selfWrite, 0)
+	atomic.StoreUint32(&selfWriteSeq, 0)
+}
+
+func clipboardSequenceNumber() uint32 {
+	seq, _, _ := procGetClipboardSequenceNumber.Call()
+	return uint32(seq)
+}
+
+func recordSelfWriteSeq() {
+	if atomic.CompareAndSwapInt32(&selfWrite, 1, 0) {
+		atomic.StoreUint32(&selfWriteSeq, clipboardSequenceNumber())
+	}
 }
 
 // PanicLogger is set by the host application to receive panic reports from
@@ -199,14 +217,21 @@ func readClipboardDword(format uintptr) (uint32, bool) {
 	return uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24, true
 }
 
+type clipboardJob struct {
+	entry  *ClipEntry
+	reason SkipReason
+}
+
 type Watcher struct {
-	hwnd      uintptr
-	callback  OnClipChangeFunc
-	onSkip    OnClipSkipFunc
-	filter    func(string) bool
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	startOnce sync.Once
+	hwnd       uintptr
+	callback   OnClipChangeFunc
+	onSkip     OnClipSkipFunc
+	filter     func(string) bool
+	jobs       chan clipboardJob
+	workerDone chan struct{}
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	startOnce  sync.Once
 }
 
 func NewWatcher(callback OnClipChangeFunc) *Watcher {
@@ -290,16 +315,14 @@ var globalWatcher *Watcher
 func clipboardWndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr {
 	if umsg == WM_CLIPBOARDUPDATE {
 		defer recoverPanic("clipboardWndProc")
-		// Skip updates caused by our own clipboard writes.
-		if atomic.CompareAndSwapInt32(&selfWrite, 1, 0) {
+		seq := clipboardSequenceNumber()
+		if (seq != 0 && seq == atomic.LoadUint32(&selfWriteSeq)) || atomic.CompareAndSwapInt32(&selfWrite, 1, 0) {
 			return 0
 		}
-		if globalWatcher != nil && globalWatcher.callback != nil {
-			entry, reason := readClipboard(globalWatcher.filter)
-			if entry != nil {
-				globalWatcher.callback(*entry)
-			} else if reason != "" {
-				globalWatcher.reportSkip(reason)
+		if w := globalWatcher; w != nil {
+			entry, reason := readClipboardJob(w.filter)
+			if entry != nil || reason != "" {
+				w.enqueueJob(clipboardJob{entry: entry, reason: reason})
 			}
 		}
 		return 0
@@ -309,16 +332,22 @@ func clipboardWndProc(hwnd uintptr, umsg uint32, wParam, lParam uintptr) uintptr
 }
 
 func (w *Watcher) Start() error {
-	globalWatcher = w
-	initCh := make(chan error, 1)
-	go w.messageLoop(initCh)
+	var startErr error
+	w.startOnce.Do(func() {
+		globalWatcher = w
+		w.jobs = make(chan clipboardJob, 16)
+		w.workerDone = make(chan struct{})
+		go w.runJobs()
+		initCh := make(chan error, 1)
+		go w.messageLoop(initCh)
 
-	select {
-	case err := <-initCh:
-		return err
-	case <-time.After(3 * time.Second):
-		return fmt.Errorf("clipboard watcher did not finish startup in time")
-	}
+		select {
+		case startErr = <-initCh:
+		case <-time.After(3 * time.Second):
+			startErr = fmt.Errorf("clipboard watcher did not finish startup in time")
+		}
+	})
+	return startErr
 }
 
 func (w *Watcher) Stop() {
@@ -332,7 +361,47 @@ func (w *Watcher) Stop() {
 	})
 }
 
+func (w *Watcher) enqueueJob(job clipboardJob) {
+	if w.jobs == nil {
+		return
+	}
+	select {
+	case w.jobs <- job:
+	default:
+		select {
+		case <-w.jobs:
+		default:
+		}
+		select {
+		case w.jobs <- job:
+		default:
+		}
+	}
+}
+
+func (w *Watcher) runJobs() {
+	defer close(w.workerDone)
+	for job := range w.jobs {
+		select {
+		case <-w.stopCh:
+			return
+		default:
+		}
+		w.processJob(job)
+	}
+}
+
+func (w *Watcher) processJob(job clipboardJob) {
+	defer recoverPanic("clipboard:worker")
+	if job.entry != nil && w.callback != nil {
+		w.callback(*job.entry)
+	} else if job.reason != "" {
+		w.reportSkip(job.reason)
+	}
+}
+
 func (w *Watcher) messageLoop(initCh chan<- error) {
+	defer close(w.jobs)
 	defer recoverPanic("clipboard:messageLoop")
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -375,7 +444,7 @@ func (w *Watcher) messageLoop(initCh chan<- error) {
 			return
 		default:
 			ret, _, _ := procGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
-			if ret == 0 {
+			if int32(ret) <= 0 {
 				return
 			}
 			procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
@@ -383,7 +452,8 @@ func (w *Watcher) messageLoop(initCh chan<- error) {
 		}
 	}
 }
-func readClipboard(filter func(string) bool) (*ClipEntry, SkipReason) {
+
+func readClipboardJob(filter func(string) bool) (*ClipEntry, SkipReason) {
 	allowText, allowImage := true, true
 	if filter != nil {
 		allowText, allowImage = filter("text"), filter("image")
@@ -392,12 +462,21 @@ func readClipboard(filter func(string) bool) (*ClipEntry, SkipReason) {
 		return nil, ""
 	}
 	entry, dib, reason := readClipboardSnapshot(allowText, allowImage)
-	// The system clipboard has been closed before file I/O, thumbnail
-	// generation, hashing and database writes. Other apps can copy immediately.
 	if dib != nil {
-		return storeImageSnapshot(dib)
+		return &ClipEntry{
+			Type:      "image",
+			Preview:   "[图片]",
+			Timestamp: time.Now().UnixMilli(),
+			RawImage:  dib,
+		}, ""
 	}
 	return entry, reason
+}
+
+// StoreImageSnapshot persists raw DIB bytes to disk and creates a compact PNG
+// thumbnail data URL.
+func StoreImageSnapshot(dibData []byte) (*ClipEntry, SkipReason) {
+	return storeImageSnapshot(dibData)
 }
 
 func readClipboardSnapshot(allowText, allowImage bool) (*ClipEntry, []byte, SkipReason) {
@@ -599,7 +678,8 @@ func DibToThumbnailDataURL(dib []byte, maxSide int) (string, error) {
 	}
 
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
+	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
+	if err := encoder.Encode(&buf, img); err != nil {
 		return "", err
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(buf.Bytes()), nil
@@ -685,17 +765,32 @@ func parseDibHeader(dib []byte, size int64) (dibInfo, error) {
 	}, nil
 }
 
-// DIBPreview samples only the rows needed by a bounded detail preview. A 4K
-// source stays on disk instead of being read into a full-resolution buffer.
-func DIBPreview(source io.ReaderAt, size int64, maxSide int) (*image.RGBA, error) {
+// CanPreviewDIB reports whether the DIB header describes a previewable format
+// without decoding pixel rows, allowing HEAD requests to avoid image decoding.
+func CanPreviewDIB(source io.ReaderAt, size int64) bool {
+	_, err := readPreviewableDIBHeader(source, size, 1280)
+	return err == nil
+}
+
+func readPreviewableDIBHeader(source io.ReaderAt, size int64, maxSide int) (dibInfo, error) {
 	var header [124]byte
 	n, _ := source.ReadAt(header[:], 0)
 	info, err := parseDibHeader(header[:n], size)
 	if err != nil {
-		return nil, err
+		return dibInfo{}, err
 	}
 	if (info.bitCount != 24 && info.bitCount != 32) || (info.compression != 0 && info.compression != 3) || maxSide < 1 || maxSide > 2048 || size > 50*1024*1024 {
-		return nil, fmt.Errorf("unsupported preview format")
+		return dibInfo{}, fmt.Errorf("unsupported preview format")
+	}
+	return info, nil
+}
+
+// DIBPreview samples only the rows needed by a bounded detail preview. A 4K
+// source stays on disk instead of being read into a full-resolution buffer.
+func DIBPreview(source io.ReaderAt, size int64, maxSide int) (*image.RGBA, error) {
+	info, err := readPreviewableDIBHeader(source, size, maxSide)
+	if err != nil {
+		return nil, err
 	}
 	width, height := scaledDimensions(info.width, info.height, maxSide)
 	preview := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -909,6 +1004,7 @@ func WriteDibToClipboard(dibData []byte) error {
 		procGlobalFree.Call(hMem)
 		return callError(err)
 	}
+	recordSelfWriteSeq()
 	return nil
 }
 
@@ -949,6 +1045,7 @@ func WriteTextToClipboard(text string) error {
 		procGlobalFree.Call(hMem)
 		return callError(err)
 	}
+	recordSelfWriteSeq()
 	return nil
 }
 

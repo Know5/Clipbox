@@ -1,11 +1,8 @@
 package storage
 
 import (
-	"encoding/base64"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Only a definitely missing absolute file is eligible for maintenance deletion.
@@ -16,15 +13,6 @@ func missingImageFile(content string) bool {
 	}
 	_, err := os.Stat(content)
 	return os.IsNotExist(err)
-}
-
-func legacyBMP(content string) bool {
-	if len(content) > 70*1024*1024 || filepath.IsAbs(content) {
-		return false
-	}
-	var header [14]byte
-	_, err := io.ReadFull(base64.NewDecoder(base64.StdEncoding, strings.NewReader(content)), header[:])
-	return err == nil && header[0] == 'B' && header[1] == 'M'
 }
 
 // Capture and backup import share the same recovery rule. Preserve usable

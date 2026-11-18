@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { ClipEntry } from "./clipHistory";
+import type { ClipEntry, ClipExportResult } from "./clipHistory";
 import { useDialogFocus } from "./useDialogFocus";
 import { useUIActivity } from "./useUIActivity";
-interface ClipExportResult {
-  path?: string;
-  type?: string;
-  bytes?: number;
-  cancelled?: boolean;
-}
 function formatDetailTime(ts: number) {
   if (!ts) return "-";
   return new Date(ts).toLocaleString([], {

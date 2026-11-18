@@ -139,9 +139,25 @@ func (a *App) CancelTextTask(taskID string) {
 }
 
 func (a *App) GetOCRLanguages() ([]ocr.Language, error) {
+	a.ocrLangMu.Lock()
+	if a.ocrLangsReady {
+		cached := append([]ocr.Language(nil), a.ocrLangs...)
+		a.ocrLangMu.Unlock()
+		return cached, nil
+	}
+	a.ocrLangMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return ocr.Languages(ctx)
+	languages, err := ocr.Languages(ctx)
+	if err != nil {
+		return nil, err
+	}
+	a.ocrLangMu.Lock()
+	a.ocrLangs = append([]ocr.Language(nil), languages...)
+	a.ocrLangsReady = true
+	a.ocrLangMu.Unlock()
+	return languages, nil
 }
 
 func (a *App) RecognizeClipText(id int64, language, taskID string) (ocr.Result, error) {

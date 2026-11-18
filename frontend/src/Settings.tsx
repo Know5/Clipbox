@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import "./Settings.css";
 import SettingsAdvanced from "./SettingsAdvanced";
 import SettingsGeneral from "./SettingsGeneral";
@@ -10,10 +10,18 @@ const TextToolsSettings = lazy(() => import("./TextToolsSettings"));
 interface SettingsProps {
   onBack: () => void;
   initialTab?: SettingsTab;
+  openSignal?: number;
 }
-export default function Settings({ onBack, initialTab = "general" }: SettingsProps) {
+export default function Settings({
+  onBack,
+  initialTab = "general",
+  openSignal = 0,
+}: SettingsProps) {
   const context = useSettingsController();
   const [tab, setTab] = useState<SettingsTab>(initialTab);
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab, openSignal]);
   return (
     <div className="settings-panel">
       <div className="settings-header">

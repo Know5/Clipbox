@@ -13,6 +13,7 @@ import (
 
 	"clipbox/internal/clipboard"
 	"clipbox/internal/hotkey"
+	"clipbox/internal/ocr"
 	"clipbox/internal/storage"
 )
 
@@ -350,5 +351,72 @@ func TestReservedHotkeyReason(t *testing.T) {
 				t.Fatalf("reservedHotkeyReason(%#x, %#x) reserved = %v, want %v", tc.modifiers, tc.keyCode, got, tc.reserved)
 			}
 		})
+	}
+}
+
+func TestGetOCRLanguagesReturnsCachedCopy(t *testing.T) {
+	app := NewApp(t.TempDir(), false)
+	app.ocrLangMu.Lock()
+	app.ocrLangs = []ocr.Language{{Tag: "zh-Hans", Name: "简体中文"}}
+	app.ocrLangsReady = true
+	app.ocrLangMu.Unlock()
+
+	got, err := app.GetOCRLanguages()
+	if err != nil {
+		t.Fatalf("GetOCRLanguages() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Tag != "zh-Hans" {
+		t.Fatalf("GetOCRLanguages() = %+v", got)
+	}
+	got[0].Tag = "mutated"
+	again, err := app.GetOCRLanguages()
+	if err != nil || again[0].Tag != "zh-Hans" {
+		t.Fatalf("cached ocrLangs was mutated: %+v, %v", again, err)
+	}
+}
+
+func TestSourceIconCacheLRUEviction(t *testing.T) {
+	sourceIconMu.Lock()
+	prevCache := sourceIconCache
+	prevOrder := sourceIconOrder
+	sourceIconCache = make(map[string]string, sourceIconCacheLimit)
+	sourceIconOrder = make([]string, 0, sourceIconCacheLimit)
+	t.Cleanup(func() {
+		sourceIconMu.Lock()
+		sourceIconCache = prevCache
+		sourceIconOrder = prevOrder
+		sourceIconMu.Unlock()
+	})
+
+	var keys [sourceIconCacheLimit]string
+	for i := range keys {
+		key := filepath.Join(`C:\fake`, string(rune('a'+i/26))+string(rune('a'+i%26))+".exe")
+		key = strings.ToLower(key)
+		keys[i] = key
+		sourceIconCache[key] = "data:image/png;base64,cached"
+		sourceIconOrder = append(sourceIconOrder, key)
+	}
+	sourceIconMu.Unlock()
+
+	app := NewApp(t.TempDir(), false)
+	// Touch oldest key k0 so k1 becomes the least-recently-used key.
+	if url, err := app.GetSourceIcon(keys[0]); err != nil || url != "data:image/png;base64,cached" {
+		t.Fatalf("GetSourceIcon(k0) = (%q, %v)", url, err)
+	}
+
+	missing := filepath.Join(t.TempDir(), "missing-lru-evict.exe")
+	if _, err := app.GetSourceIcon(missing); err != nil {
+		t.Fatalf("GetSourceIcon(missing) error = %v", err)
+	}
+
+	sourceIconMu.Lock()
+	_, hasK0 := sourceIconCache[keys[0]]
+	_, hasK1 := sourceIconCache[keys[1]]
+	_, hasNew := sourceIconCache[strings.ToLower(missing)]
+	cacheLen := len(sourceIconCache)
+	sourceIconMu.Unlock()
+
+	if !hasK0 || hasK1 || !hasNew || cacheLen != sourceIconCacheLimit {
+		t.Fatalf("LRU state: hasK0=%v hasK1=%v hasNew=%v len=%d", hasK0, hasK1, hasNew, cacheLen)
 	}
 }

@@ -164,3 +164,56 @@ func scanClipRows(rows *sql.Rows) ([]clipboard.ClipEntry, error) {
 	}
 	return entries, nil
 }
+
+// GetImagePathsByIDs fetches stored image content paths for the requested IDs
+// in a single query per batch instead of one round-trip per row.
+func (s *Store) GetImagePathsByIDs(ids []int64) (map[int64]string, error) {
+	result := make(map[int64]string, len(ids))
+	seen := make(map[int64]struct{}, len(ids))
+	unique := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return result, nil
+	}
+	const chunkSize = 500
+	for start := 0; start < len(unique); start += chunkSize {
+		end := start + chunkSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		batch := unique[start:end]
+		placeholders := strings.Repeat("?,", len(batch)-1) + "?"
+		args := make([]interface{}, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := s.db.Query(`SELECT id, content FROM clips WHERE type = 'image' AND id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id int64
+			var content string
+			if err := rows.Scan(&id, &content); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			result[id] = content
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return result, nil
+}

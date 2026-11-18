@@ -84,7 +84,7 @@ API Key 使用 Windows 当前账户加密保存，不回传给界面，也不随
 
 ## 开发
 
-需要 Go 1.26+（`go.mod` 固定 `toolchain go1.27.3`，缺了会自动下载）、Node.js 20.19+ 或 22.12+、Wails CLI v2.17.1 和 WebView2。
+需要 Go 1.26+（`go.mod` 固定 `toolchain go1.27.4`，缺了会自动下载）、Node.js 20.19+ 或 22.12+、Wails CLI v2.17.1 和 WebView2。
 
 ```powershell
 git clone https://github.com/Know5/Clipbox.git

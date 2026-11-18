@@ -21,25 +21,26 @@ func (s *Store) Delete(id int64) error {
 
 func (s *Store) Stats() (Stats, error) {
 	var stats Stats
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM clips`).Scan(&stats.TotalClips); err != nil {
-		return stats, err
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM clips WHERE type = 'text'`).Scan(&stats.TextClips); err != nil {
-		return stats, err
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM clips WHERE type = 'image'`).Scan(&stats.ImageClips); err != nil {
-		return stats, err
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM clips WHERE pinned = 1`).Scan(&stats.PinnedClips); err != nil {
-		return stats, err
-	}
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM clips WHERE pinned = 0`).Scan(&stats.UnpinnedClips); err != nil {
+	if err := s.db.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(CASE WHEN type = 'text' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN type = 'image' THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN pinned = 0 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(LENGTH(thumbnail)), 0)
+		FROM clips
+	`).Scan(
+		&stats.TotalClips,
+		&stats.TextClips,
+		&stats.ImageClips,
+		&stats.PinnedClips,
+		&stats.UnpinnedClips,
+		&stats.ThumbnailBytes,
+	); err != nil {
 		return stats, err
 	}
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM settings`).Scan(&stats.SettingsEntries); err != nil {
-		return stats, err
-	}
-	if err := s.db.QueryRow(`SELECT COALESCE(SUM(LENGTH(thumbnail)), 0) FROM clips`).Scan(&stats.ThumbnailBytes); err != nil {
 		return stats, err
 	}
 

@@ -68,6 +68,8 @@ type ClipImageMeta struct {
 }
 
 func (a *App) GetClips(limit, offset int) ([]clipboard.ClipEntry, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	return a.store.GetAll(limit, offset)
 }
 
@@ -126,17 +128,15 @@ func (a *App) GetClipTags(query, clipType string) ([]ClipTag, error) {
 }
 
 func (a *App) SearchClips(query string) ([]clipboard.ClipEntry, error) {
+	a.historyMu.Lock()
+	defer a.historyMu.Unlock()
 	return a.store.Search(query, 50, 0)
 }
 
 func (a *App) SearchClipPage(query string, limit, offset int) (ClipPage, error) {
 	a.historyMu.Lock()
 	defer a.historyMu.Unlock()
-	items, err := a.store.Search(query, limit, offset)
-	if err != nil {
-		return ClipPage{}, err
-	}
-	total, err := a.store.CountSearch(query)
+	items, total, err := a.store.SearchPage(query, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
 	}
@@ -146,11 +146,7 @@ func (a *App) SearchClipPage(query string, limit, offset int) (ClipPage, error) 
 func (a *App) SearchClipPageByType(query, clipType string, limit, offset int) (ClipPage, error) {
 	a.historyMu.Lock()
 	defer a.historyMu.Unlock()
-	items, err := a.store.SearchByType(query, clipType, limit, offset)
-	if err != nil {
-		return ClipPage{}, err
-	}
-	total, err := a.store.CountSearchByType(query, clipType)
+	items, total, err := a.store.SearchPageByType(query, clipType, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
 	}
@@ -160,11 +156,7 @@ func (a *App) SearchClipPageByType(query, clipType string, limit, offset int) (C
 func (a *App) SearchClipPageByTypeAndTag(query, clipType, tag string, limit, offset int) (ClipPage, error) {
 	a.historyMu.Lock()
 	defer a.historyMu.Unlock()
-	items, err := a.store.SearchByTypeAndTag(query, clipType, tag, limit, offset)
-	if err != nil {
-		return ClipPage{}, err
-	}
-	total, err := a.store.CountSearchByTypeAndTag(query, clipType, tag)
+	items, total, err := a.store.SearchPageByTypeAndTag(query, clipType, tag, limit, offset)
 	if err != nil {
 		return ClipPage{}, err
 	}
@@ -256,16 +248,17 @@ func (a *App) GetSystemAccentColor() (string, error) {
 // clips. Missing ids, non-image clips, legacy base64 entries, and unreadable
 // files are omitted.
 func (a *App) GetClipImageMeta(ids []int64) ([]ClipImageMeta, error) {
-	metas := make([]ClipImageMeta, 0, len(ids))
+	paths, err := a.store.GetImagePathsByIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	metas := make([]ClipImageMeta, 0, len(paths))
 	for _, id := range ids {
-		entry, err := a.store.GetByID(id)
-		if err != nil {
-			return nil, err
-		}
-		if entry == nil || entry.Type != "image" {
+		content, ok := paths[id]
+		if !ok {
 			continue
 		}
-		meta, ok := readClipImageMeta(entry.Content)
+		meta, ok := readClipImageMeta(content)
 		if !ok {
 			continue
 		}
@@ -708,7 +701,9 @@ func (a *App) ExportBackup() (storage.BackupStats, error) {
 		a.logErrorf("export backup dialog failed: %v", err)
 		return storage.BackupStats{}, err
 	}
+	a.backupMu.Lock()
 	stats, err := a.store.ExportBackupFile(path, appVersion)
+	a.backupMu.Unlock()
 	if err != nil {
 		a.logErrorf("export backup failed: %v", err)
 		return storage.BackupStats{}, err
@@ -734,14 +729,20 @@ func (a *App) ImportBackup() (storage.BackupStats, error) {
 		a.logErrorf("import backup dialog failed: %v", err)
 		return storage.BackupStats{}, err
 	}
+	a.settingsWriteMu.Lock()
 	a.historyMu.Lock()
 	stats, err := a.store.ImportBackupFile(path)
 	a.historyMu.Unlock()
 	if err != nil {
+		a.settingsWriteMu.Unlock()
 		a.logErrorf("import backup failed: %v", err)
 		return storage.BackupStats{}, err
 	}
-	applyErr := a.applyImportedRuntimeSettings()
+	var applyErr error
+	if !stats.Cancelled {
+		applyErr = a.applyImportedRuntimeSettings()
+	}
+	a.settingsWriteMu.Unlock()
 	if a.ctx != nil && !stats.Cancelled {
 		a.emit("settings:updated", a.loadAppSettings())
 		a.emit("clips:changed")

@@ -87,21 +87,23 @@ func runResident(dataDir string, hidden bool) error {
 	r.pendingShow = false
 	r.emitLocked(uiEvent{Name: "ui:quit"})
 	child := r.child
+	childDone := r.childDone
 	r.mu.Unlock()
 	listener.Close()
 	// A normal UI quit releases its browser environment. If the UI crashed or
-	// stopped responding, the resident still exits and the next launch recovers.
-	if child != nil && child.Process != nil {
-		for i := 0; i < 20; i++ {
-			r.mu.Lock()
-			running := r.child != nil
-			r.mu.Unlock()
-			if !running {
-				break
+	// stopped responding, kill the host and wait for Job cleanup before exiting.
+	if child != nil && child.Process != nil && childDone != nil {
+		timer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-childDone:
+			timer.Stop()
+		case <-timer.C:
+			_ = child.Process.Kill()
+			select {
+			case <-childDone:
+			case <-time.After(3 * time.Second):
 			}
-			time.Sleep(25 * time.Millisecond)
 		}
-		_ = child.Process.Kill()
 	}
 	r.mu.Lock()
 	for conn := range r.clients {
@@ -318,10 +320,10 @@ func (r *resident) emitLocked(event uiEvent) {
 	}
 }
 
-func (r *resident) show(settings bool) {
+func (r *resident) show(settings bool) bool {
 	select {
 	case <-r.app.stopCh:
-		return
+		return false
 	default:
 	}
 	r.mu.Lock()
@@ -333,7 +335,7 @@ func (r *resident) show(settings bool) {
 	if r.child != nil {
 		if r.releasing {
 			r.pendingShow = true
-			return
+			return true
 		}
 		if r.ready {
 			r.emitLocked(uiEvent{Name: "ui:show"})
@@ -342,7 +344,7 @@ func (r *resident) show(settings bool) {
 				r.settings = false
 			}
 		}
-		return
+		return true
 	}
 	for len(r.events) > 0 {
 		<-r.events
@@ -350,7 +352,8 @@ func (r *resident) show(settings bool) {
 	executable, err := os.Executable()
 	if err != nil {
 		r.app.logErrorf("resolve UI executable failed")
-		return
+		r.settings = false
+		return false
 	}
 	cmd := exec.Command(executable, "--ui")
 	if hasArg("--isolated") {
@@ -360,14 +363,16 @@ func (r *resident) show(settings bool) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := cmd.Start(); err != nil {
 		r.app.logErrorf("start UI failed: %v", err)
-		return
+		r.settings = false
+		return false
 	}
 	job, err := ownUIProcess(cmd.Process.Pid)
 	if err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		r.app.logErrorf("UI process group setup failed: %v", err)
-		return
+		r.settings = false
+		return false
 	}
 	r.child = cmd
 	r.launchedAt = time.Now()
@@ -405,11 +410,14 @@ func (r *resident) show(settings bool) {
 			r.app.showWindowFromTray()
 		}
 	}()
+	return true
 }
 
 func (r *resident) hide() {
 	idleSeconds := r.app.loadAppSettings().UIIdleSeconds
 	r.mu.Lock()
+	r.pendingShow = false
+	r.settings = false
 	if r.idle != nil {
 		r.idle.Stop()
 	}

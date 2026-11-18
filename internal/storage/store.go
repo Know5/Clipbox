@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,8 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+var ErrMissingImagePayload = errors.New("image entry has no stored path")
 
 type Store struct {
 	db           *sql.DB
@@ -315,11 +318,32 @@ func (s *Store) backfillContentHashes() error {
 	return nil
 }
 
+// HasReadableImageHash reports whether a stored image record with the given
+// SHA-256 already exists on disk and does not need to be re-written.
+func (s *Store) HasReadableImageHash(hash string) (bool, error) {
+	if hash == "" {
+		return false, nil
+	}
+	var content string
+	err := s.db.QueryRow(`SELECT content FROM clips WHERE type = 'image' AND content_hash = ? LIMIT 1`, hash).Scan(&content)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return !missingImageFile(content), nil
+}
+
 func (s *Store) SaveOrUpdate(entry clipboard.ClipEntry) (int64, error) {
 	entry = normalizeClipMetadata(entry)
-	h, err := s.hashEntryContent(entry)
-	if err != nil {
-		return 0, err
+	h := entry.ContentHash
+	if h == "" {
+		var err error
+		h, err = s.hashEntryContent(entry)
+		if err != nil {
+			return 0, err
+		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -333,6 +357,9 @@ func (s *Store) SaveOrUpdate(entry clipboard.ClipEntry) (int64, error) {
 	var existingTags string
 	err = tx.QueryRow("SELECT id, content, thumbnail, note, tags FROM clips WHERE content_hash = ?", h).Scan(&existingID, &existingContent, &existingThumbnail, &existingNote, &existingTags)
 	if err == sql.ErrNoRows {
+		if entry.Type == "image" && entry.Content == "" {
+			return 0, ErrMissingImagePayload
+		}
 		result, err := tx.Exec(
 			`INSERT INTO clips (type, content, preview, thumbnail, timestamp, pinned, content_hash, source_app, source_title, source_path, note, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			entry.Type, entry.Content, entry.Preview, entry.Thumbnail, entry.Timestamp, entry.Pinned, h, entry.SourceApp, entry.SourceTitle, entry.SourcePath, entry.Note, entry.Tags,
@@ -368,6 +395,9 @@ func (s *Store) SaveOrUpdate(entry clipboard.ClipEntry) (int64, error) {
 	content := existingContent
 	var discard []string
 	if entry.Type == "image" {
+		if entry.Content == "" && missingImageFile(existingContent) {
+			return 0, ErrMissingImagePayload
+		}
 		content, discard = chooseImageContent(existingContent, entry.Content)
 	}
 	_, err = tx.Exec(

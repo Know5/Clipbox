@@ -6,14 +6,10 @@ import {
   CopyAndPaste,
   CopyToClipboard,
   DeleteClip,
-  ExportClip,
   FrontendReady,
-  GetAppSettings,
-  GetClipDetails,
   GetClipPageByTypeAndTag,
   GetClipTags,
   GetHotkeySettings,
-  GetImageURL,
   GetViewState,
   GetWindowPinned,
   HideWindow,
@@ -22,49 +18,24 @@ import {
   SearchClipPageByTypeAndTag,
   TogglePin,
   ToggleWindowPin,
-  UpdateClipMetadata,
 } from "./api";
-import type { ClipEntry, ClipHistoryChange } from "./clipHistory";
+import type { ClearResult, ClipEntry, ClipHistoryChange, ClipPage, ClipTag } from "./clipHistory";
 import { applyHistoryChange, mergeClips } from "./clipHistory";
-import { refreshAccent, syncWindowBackground } from "./theme";
+import { refreshAccent } from "./theme";
 import { useImageMetadata } from "./useImageMetadata";
+import { useClipDetail } from "./useClipDetail";
+import { useClipShortcuts } from "./useClipShortcuts";
+import { useThemeSync } from "./useThemeSync";
 
 import ClipDetailPanel from "./ClipDetailPanel";
 import type { CopyFeedback } from "./ClipItem";
 import ClipItem, { PinIcon } from "./ClipItem";
+import ContextMenu, { type CtxMenu } from "./ContextMenu";
+import ToolbarPopovers from "./ToolbarPopovers";
 import { formatTime } from "./clipFormat";
 
 const Settings = lazy(() => import("./Settings"));
 const TextToolsPanel = lazy(() => import("./TextToolsPanel"));
-
-interface ClipPage {
-  items: ClipEntry[];
-  total: number;
-  limit: number;
-  offset: number;
-  hasMore: boolean;
-}
-
-interface ClipTag {
-  name: string;
-  count: number;
-}
-
-interface ClearResult {
-  deletedClips?: number;
-  deletedImages?: number;
-  pinnedKept?: number;
-  stats?: {
-    pinnedClips?: number;
-  };
-}
-
-interface ClipExportResult {
-  path?: string;
-  type?: string;
-  bytes?: number;
-  cancelled?: boolean;
-}
 
 const PAGE_SIZE = 50;
 function formatImageMeta(meta?: { width: number; height: number; bytes: number }) {
@@ -78,11 +49,6 @@ function formatImageMeta(meta?: { width: number; height: number; bytes: number }
         : `${(meta.bytes / 1048576).toFixed(1)} MB`;
   return [size, bytes].filter(Boolean).join(" · ");
 }
-
-// 右键菜单：搜索框一套，列表项一套。
-type CtxMenu =
-  | { x: number; y: number; kind: "search" }
-  | { x: number; y: number; kind: "item"; clipId: number };
 type ClipFilter = "all" | "text" | "image";
 
 function describeClearResult(result?: ClearResult) {
@@ -104,6 +70,7 @@ function App() {
   const [windowVisible, setWindowVisible] = useState(!document.hidden);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "textTools">("general");
+  const [settingsOpenSignal, setSettingsOpenSignal] = useState(0);
   const [textToolsClip, setTextToolsClip] = useState<ClipEntry | null>(null);
   const [openPanel, setOpenPanel] = useState<null | "tags" | "help" | "more">(null);
   const imageMeta = useImageMetadata(clips);
@@ -123,6 +90,7 @@ function App() {
   const [showBackToTop, setShowBackToTop] = useState(false);
   // 方向键走到已加载末尾时，加载下一页后自动选中的第一条
   const pendingSelectNext = useRef(false);
+  const scrollSelectionIntoViewRef = useRef(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [deleteDeletingId, setDeleteDeletingId] = useState<number | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>({
@@ -130,17 +98,25 @@ function App() {
     message: "",
     error: false,
   });
-  const [detailClip, setDetailClip] = useState<ClipEntry | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState("");
-  const [detailImageUrl, setDetailImageUrl] = useState("");
-  const [detailImageLoading, setDetailImageLoading] = useState(false);
-  const detailRequestSeq = useRef(0);
-  const detailClipRef = useRef<ClipEntry | null>(null);
-  detailClipRef.current = detailClip;
+  const {
+    detailClip,
+    detailLoading,
+    detailError,
+    detailImageUrl,
+    detailImageLoading,
+    detailOpen,
+    closeDetail,
+    handleOpenDetail,
+    handleSaveMetadata,
+    handleExportClip,
+    refreshDetailImageOnShow,
+    releaseDetailOnHide,
+    clearDetailIfDeleted,
+  } = useClipDetail();
   const dialogOpenRef = useRef(false);
-  dialogOpenRef.current = Boolean(detailClip || detailLoading || textToolsClip);
+  dialogOpenRef.current = Boolean(detailOpen || textToolsClip);
   const [viewStateLoaded, setViewStateLoaded] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
   // 每分钟自增一次，触发相对时间标签（"x 分钟前"）重新计算
   const [, setTimeTick] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -222,6 +198,11 @@ function App() {
     };
   }, []);
 
+  const selectClipByKeyboard = useCallback((id: number | null) => {
+    if (id != null) scrollSelectionIntoViewRef.current = true;
+    setSelectedClipId(id);
+  }, []);
+
   const loadClipPage = useCallback(
     async (
       offset = 0,
@@ -252,7 +233,7 @@ function App() {
         } else if (pendingSelectNext.current && items.length > 0) {
           // 方向键翻页：选到下一页的第一条
           pendingSelectNext.current = false;
-          setSelectedClipId(items[0].id);
+          selectClipByKeyboard(items[0].id);
         }
         totalClipsRef.current = page?.total || 0;
         setTotalClips(totalClipsRef.current);
@@ -270,29 +251,8 @@ function App() {
         }
       }
     },
-    [commitClips],
+    [commitClips, selectClipByKeyboard],
   );
-
-  useEffect(() => {
-    let active = true;
-    Promise.resolve()
-      .then(GetViewState)
-      .then((raw) => {
-        if (!raw || !active) return;
-        const state = JSON.parse(raw) as { search?: string; filter?: ClipFilter; tag?: string };
-        if (typeof state.search === "string") setSearch(state.search);
-        if (state.filter === "all" || state.filter === "text" || state.filter === "image")
-          setFilter(state.filter);
-        if (typeof state.tag === "string") setSelectedTag(state.tag);
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (active) setViewStateLoaded(true);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (!viewStateLoaded) return;
@@ -317,8 +277,67 @@ function App() {
   }, [selectedTag]);
 
   useEffect(() => {
-    loadClipPage(0, false);
+    let active = true;
+    let handledBeforeBoot = false;
+    Promise.resolve()
+      .then(GetViewState)
+      .then((raw) => {
+        if (!active) return;
+        const userEdited =
+          searchValueRef.current !== "" ||
+          filterValueRef.current !== "all" ||
+          selectedTagRef.current !== "";
+        let nextSearch = searchValueRef.current;
+        let nextFilter = filterValueRef.current;
+        let nextTag = selectedTagRef.current;
+        if (raw && !userEdited) {
+          const state = JSON.parse(raw) as {
+            search?: string;
+            filter?: ClipFilter;
+            tag?: string;
+          };
+          if (typeof state.search === "string") {
+            nextSearch = state.search;
+            searchValueRef.current = state.search;
+            setSearch(state.search);
+          }
+          if (state.filter === "all" || state.filter === "text" || state.filter === "image") {
+            nextFilter = state.filter;
+            filterValueRef.current = state.filter;
+            setFilter(state.filter);
+          }
+          if (typeof state.tag === "string") {
+            nextTag = state.tag;
+            selectedTagRef.current = state.tag;
+            setSelectedTag(state.tag);
+          }
+        }
+        const restoredCustom =
+          !userEdited && Boolean(nextSearch.trim() || nextFilter !== "all" || nextTag);
+        if (!handledBeforeBoot || restoredCustom) {
+          handledBeforeBoot = true;
+          loadClipPage(0, false, nextSearch.trim(), nextFilter, nextTag);
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        if (!handledBeforeBoot) {
+          handledBeforeBoot = true;
+          loadClipPage(
+            0,
+            false,
+            searchValueRef.current.trim(),
+            filterValueRef.current,
+            selectedTagRef.current,
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setViewStateLoaded(true);
+      });
     const unsub1 = EventsOn("clips:updated", (change?: ClipHistoryChange) => {
+      setHistoryRevision((rev) => rev + 1);
+      if (!handledBeforeBoot) return;
       const activeSearch = searchValueRef.current.trim();
       const activeFilter = filterValueRef.current;
       const activeTag = selectedTagRef.current;
@@ -356,9 +375,7 @@ function App() {
       totalClipsRef.current = next.total;
       setTotalClips(next.total);
       setHasMore(next.hasMore);
-      setDetailClip((current) =>
-        current && change.deletedIds.includes(current.id) ? null : current,
-      );
+      clearDetailIfDeleted(change.deletedIds);
       setTextToolsClip((current) =>
         current && change.deletedIds.includes(current.id) ? null : current,
       );
@@ -375,15 +392,7 @@ function App() {
     const unsub2 = EventsOn("window:shown", () => {
       setWindowVisible(true);
       if (!dialogOpenRef.current) searchRef.current?.focus();
-      const detail = detailClipRef.current;
-      if (detail?.type === "image") {
-        const request = ++detailRequestSeq.current;
-        GetImageURL(detail.id)
-          .then((url) => {
-            if (request === detailRequestSeq.current) setDetailImageUrl(url);
-          })
-          .catch(() => {});
-      }
+      refreshDetailImageOnShow();
       refreshAccent().catch(console.error);
       if (activePageRequest.current?.append) {
         requestSeq.current++;
@@ -401,6 +410,8 @@ function App() {
       setShowBackToTop(false);
     });
     const unsub3 = EventsOn("clips:changed", () => {
+      handledBeforeBoot = true;
+      setHistoryRevision((rev) => rev + 1);
       const activeSearch = searchValueRef.current.trim();
       loadClipPage(0, false, activeSearch, filterValueRef.current, selectedTagRef.current);
     });
@@ -411,15 +422,13 @@ function App() {
     const unsub5 = EventsOn("settings:open", () => {
       setTextToolsClip(null);
       setSettingsInitialTab("general");
+      setSettingsOpenSignal((signal) => signal + 1);
       setShowSettings(true);
     });
     const unsub6 = EventsOn("window:hidden", () => {
       setWindowVisible(false);
       setOpenPanel(null);
-      detailRequestSeq.current++;
-      setDetailLoading(false);
-      setDetailImageUrl("");
-      setDetailImageLoading(false);
+      releaseDetailOnHide();
       if (clipsRef.current.length > PAGE_SIZE) {
         commitClips((current) => current.slice(0, PAGE_SIZE));
         setHasMore(totalClipsRef.current > PAGE_SIZE);
@@ -439,6 +448,7 @@ function App() {
     window.addEventListener("focus", onFocus);
     FrontendReady().catch(console.error);
     return () => {
+      active = false;
       requestSeq.current++;
       activePageRequest.current = null;
       unsub1();
@@ -449,7 +459,14 @@ function App() {
       unsub6();
       window.removeEventListener("focus", onFocus);
     };
-  }, [commitClips, loadClipPage, showClearFeedback]);
+  }, [
+    clearDetailIfDeleted,
+    commitClips,
+    loadClipPage,
+    refreshDetailImageOnShow,
+    releaseDetailOnHide,
+    showClearFeedback,
+  ]);
 
   useEffect(() => {
     const query = search.trim();
@@ -503,7 +520,7 @@ function App() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [openPanel, search, filter, clips]);
+  }, [openPanel, search, filter, historyRevision]);
 
   // 点面板外、窗口失焦、按 Esc 都关掉面板（面板自身的 mousedown 已 stopPropagation）。
   useEffect(() => {
@@ -523,35 +540,7 @@ function App() {
     return () => window.clearInterval(timer);
   }, [windowVisible]);
 
-  useEffect(() => {
-    // 主题：dark / light / system（跟随 Windows），应用到 <html data-theme>
-    const media = window.matchMedia("(prefers-color-scheme: light)");
-    let mode = "dark";
-    const apply = () => {
-      const resolved = mode === "light" || (mode === "system" && media.matches) ? "light" : "dark";
-      document.documentElement.setAttribute("data-theme", resolved);
-      syncWindowBackground();
-      refreshAccent().catch(console.error);
-    };
-    GetAppSettings()
-      .then((settings) => {
-        mode = (settings as { theme?: string })?.theme || "dark";
-        apply();
-      })
-      .catch(console.error);
-    const unsub = EventsOn("settings:updated", (settings?: { theme?: string }) => {
-      mode = settings?.theme || "dark";
-      apply();
-    });
-    const onMediaChange = () => {
-      if (mode === "system") apply();
-    };
-    media.addEventListener("change", onMediaChange);
-    return () => {
-      unsub();
-      media.removeEventListener("change", onMediaChange);
-    };
-  }, []);
+  useThemeSync();
 
   const handleToggleWindowPin = async () => {
     try {
@@ -660,7 +649,7 @@ function App() {
       setListError("");
       try {
         await DeleteClip(id);
-        setDetailClip((clip) => (clip?.id === id ? null : clip));
+        clearDetailIfDeleted([id]);
         setTextToolsClip((clip) => (clip?.id === id ? null : clip));
       } catch (e) {
         console.error(e);
@@ -669,7 +658,7 @@ function App() {
         setDeleteDeletingId((current) => (current === id ? null : current));
       }
     },
-    [cancelDeleteConfirmTimer],
+    [cancelDeleteConfirmTimer, clearDetailIfDeleted],
   );
 
   const requestDelete = useCallback(
@@ -692,59 +681,14 @@ function App() {
     [cancelDeleteConfirmTimer, deleteConfirmId, deleteDeletingId, handleDelete],
   );
 
-  const closeDetail = useCallback(() => {
-    detailRequestSeq.current++;
-    setDetailClip(null);
-    setDetailLoading(false);
-    setDetailError("");
-    setDetailImageUrl("");
-    setDetailImageLoading(false);
-  }, []);
-
-  const handleOpenDetail = useCallback(async (id: number) => {
-    const request = ++detailRequestSeq.current;
-    setDetailClip(null);
-    setDetailError("");
-    setDetailImageUrl("");
-    setDetailLoading(true);
-    try {
-      const detail = (await GetClipDetails(id)) as ClipEntry;
-      if (request !== detailRequestSeq.current) return;
-      setDetailClip(detail);
-      if (detail.type === "image") {
-        setDetailImageLoading(true);
-        try {
-          const url = await GetImageURL(id);
-          if (request !== detailRequestSeq.current) return;
-          setDetailImageUrl(url || "");
-        } catch (e) {
-          if (request !== detailRequestSeq.current) return;
-          console.error(e);
-          setDetailError("图片加载失败");
-        } finally {
-          if (request === detailRequestSeq.current) setDetailImageLoading(false);
-        }
-      }
-    } catch (e) {
-      if (request !== detailRequestSeq.current) return;
-      console.error(e);
-      setDetailError("加载详情失败");
-    } finally {
-      if (request === detailRequestSeq.current) setDetailLoading(false);
-    }
-  }, []);
-
-  const handleSaveMetadata = useCallback(async (id: number, note: string, tags: string) => {
-    const request = detailRequestSeq.current;
-    const updated = (await UpdateClipMetadata(id, note, tags)) as ClipEntry;
-    if (request === detailRequestSeq.current)
-      setDetailClip((current) => (current?.id === id ? updated : current));
-    return updated;
-  }, []);
-
-  const handleExportClip = useCallback(async (id: number) => {
-    return (await ExportClip(id)) as ClipExportResult;
-  }, []);
+  const handleSaveMetadataWithRevision = useCallback(
+    async (id: number, note: string, tags: string) => {
+      const updated = await handleSaveMetadata(id, note, tags);
+      setHistoryRevision((rev) => rev + 1);
+      return updated;
+    },
+    [handleSaveMetadata],
+  );
 
   const handleClear = async () => {
     if (clearing) return;
@@ -772,6 +716,7 @@ function App() {
         filterValueRef.current,
         selectedTagRef.current,
       );
+      setHistoryRevision((rev) => rev + 1);
       showClearFeedback(describeClearResult(result));
     } catch (e) {
       console.error(e);
@@ -818,7 +763,6 @@ function App() {
   const selectedIndex =
     selectedClipId == null ? -1 : filtered.findIndex((clip) => clip.id === selectedClipId);
   const selectedClip = selectedIndex >= 0 ? filtered[selectedIndex] : null;
-  const detailOpen = detailLoading || Boolean(detailClip) || Boolean(detailError);
 
   useEffect(() => {
     if (filtered.length === 0) {
@@ -831,171 +775,64 @@ function App() {
   }, [filtered, selectedClipId, selectedIndex]);
 
   useEffect(() => {
-    if (selectedClipId == null) return;
+    if (selectedClipId == null || !scrollSelectionIntoViewRef.current) return;
+    scrollSelectionIntoViewRef.current = false;
     const element = document.querySelector(`[data-clip-id="${selectedClipId}"]`);
-    element?.scrollIntoView({ block: "nearest" });
+    element?.scrollIntoView?.({ block: "nearest" });
   }, [selectedClipId]);
 
-  useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.isComposing) return;
-      if (e.key === "Escape") {
-        if (textToolsClip) {
-          setTextToolsClip(null);
-          return;
-        }
-        if (openPanel) {
-          setOpenPanel(null);
-          return;
-        }
-        if (detailOpen) {
-          closeDetail();
-          return;
-        }
-        if (showSettings) {
-          // 正在编辑设置输入框时，Esc 先失焦（触发失焦保存），再次 Esc 才返回主界面
-          const active = document.activeElement as HTMLElement | null;
-          if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
-            active.blur();
-            return;
-          }
-          setShowSettings(false);
-          return;
-        }
-        if (search.trim()) {
-          // 有搜索词时先清空搜索，再次 Esc 才隐藏窗口
-          setSearch("");
-          return;
-        }
-        HideWindow();
-        return;
-      }
-      if (showSettings || textToolsClip || detailOpen) return;
+  const loadNextClipPage = useCallback(() => {
+    pendingSelectNext.current = true;
+    loadClipPage(
+      clipsRef.current.length,
+      true,
+      searchValueRef.current.trim(),
+      filterValueRef.current,
+      selectedTagRef.current,
+    );
+  }, [loadClipPage]);
+  const closeTextTools = useCallback(() => setTextToolsClip(null), []);
+  const closeToolbarPanel = useCallback(() => setOpenPanel(null), []);
+  const closeSettingsView = useCallback(() => setShowSettings(false), []);
+  const clearSearchQuery = useCallback(() => setSearch(""), []);
+  const hideAppWindow = useCallback(() => {
+    HideWindow();
+  }, []);
+  const openClipDetailSafe = useCallback(
+    (id: number) => {
+      handleOpenDetail(id).catch(console.error);
+    },
+    [handleOpenDetail],
+  );
 
-      const target = e.target as HTMLElement | null;
-      const isInput =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        Boolean(target?.isContentEditable);
-      // 搜索框是键盘导航的起点：放行 ↑↓/Enter 直接操作列表，其余按键正常输入文字。
-      const isSearchInput = target === searchRef.current;
-      if (isInput && !isSearchInput) return;
-      // Home = 一下回到最新（列表顶部），不用滚回去（2026-10-29 使用者要求）
-      if (e.key === "Home" && !isInput) {
-        if (filtered.length === 0) return;
-        e.preventDefault();
-        setSelectedClipId(filtered[0].id);
-        if (listRef.current) listRef.current.scrollTop = 0;
-        return;
-      }
-      const selectAt = (index: number) => {
-        if (filtered[index]) {
-          setSelectedClipId(filtered[index].id);
-        }
-      };
-
-      if (e.key === "ArrowDown") {
-        if (filtered.length === 0) return;
-        e.preventDefault();
-        if (selectedIndex >= filtered.length - 1) {
-          // 已选到最后一条：自动加载下一页并选中新页第一条，
-          // 否则键盘最多只能走到当前页第 50 条。
-          if (hasMore && !loadingMore && !listLoading) {
-            pendingSelectNext.current = true;
-            loadClipPage(
-              clipsRef.current.length,
-              true,
-              searchValueRef.current.trim(),
-              filterValueRef.current,
-              selectedTagRef.current,
-            );
-          }
-          return;
-        }
-        selectAt(selectedIndex < 0 ? 0 : selectedIndex + 1);
-        return;
-      }
-      if (e.key === "ArrowUp") {
-        if (filtered.length === 0) return;
-        e.preventDefault();
-        selectAt(selectedIndex < 0 ? 0 : Math.max(selectedIndex - 1, 0));
-        return;
-      }
-      // P = 置顶 / 取消置顶（规格 4.2）
-      if (e.key.toLowerCase() === "p" && !isInput && !e.ctrlKey && !e.altKey) {
-        const targetClip = selectedClip || filtered[0];
-        if (!targetClip) return;
-        e.preventDefault();
-        handlePin(targetClip.id);
-        return;
-      }
-      // 对齐 Maccy 的 ⌘+数字:Ctrl+1~9 选中第 n 条并复制;Alt+1~9 复制并粘贴。
-      // 只在带修饰键时生效,所以搜索框里的普通数字仍可正常输入。
-      if (/^[1-9]$/.test(e.key) && (e.ctrlKey || e.altKey) && !e.metaKey) {
-        const index = Number(e.key) - 1;
-        const targetClip = filtered[index];
-        if (!targetClip) return;
-        e.preventDefault();
-        setSelectedClipId(targetClip.id);
-        if (e.altKey) {
-          handleDoubleClick(targetClip.id);
-        } else {
-          handleCopy(targetClip.id);
-        }
-        return;
-      }
-      if (e.key === "Enter") {
-        const targetClip = selectedClip || filtered[0];
-        if (!targetClip) return;
-        e.preventDefault();
-        // 2026-10-29 使用者决定:回车与单击语义统一 = 复制并粘贴回原窗口。
-        // 以前回车只复制(跟随 auto_paste 设置),看起来像"按了没反应"。
-        // 只想复制时按 Ctrl+回车(与 Ctrl+1~9 的"只复制"一致)。
-        if (e.ctrlKey) {
-          handleCopy(targetClip.id);
-        } else {
-          handleDoubleClick(targetClip.id);
-        }
-        return;
-      }
-      if (e.key === "Delete" && !isInput) {
-        const targetClip = selectedClip || filtered[0];
-        if (!targetClip) return;
-        e.preventDefault();
-        requestDelete(targetClip.id);
-        return;
-      }
-      if ((e.key === " " || e.key.toLowerCase() === "i") && !isInput) {
-        const targetClip = selectedClip || filtered[0];
-        if (!targetClip) return;
-        e.preventDefault();
-        handleOpenDetail(targetClip.id).catch(console.error);
-      }
-    };
-    window.addEventListener("keydown", down);
-    return () => {
-      window.removeEventListener("keydown", down);
-    };
-  }, [
-    closeDetail,
-    detailOpen,
+  useClipShortcuts({
     filtered,
-    handleCopy,
-    handleDoubleClick,
-    handleOpenDetail,
-    handlePin,
-    hasMore,
-    listLoading,
-    loadClipPage,
-    loadingMore,
-    openPanel,
-    requestDelete,
-    search,
-    selectedClip,
     selectedIndex,
+    selectedClip,
+    search,
     showSettings,
-    textToolsClip,
-  ]);
+    detailOpen,
+    hasTextTools: Boolean(textToolsClip),
+    openPanel,
+    hasMore,
+    loadingMore,
+    listLoading,
+    searchRef,
+    listRef,
+    selectClipByKeyboard,
+    onLoadNextPage: loadNextClipPage,
+    onCloseTextTools: closeTextTools,
+    onClosePanel: closeToolbarPanel,
+    onCloseDetail: closeDetail,
+    onCloseSettings: closeSettingsView,
+    onClearSearch: clearSearchQuery,
+    onHideWindow: hideAppWindow,
+    onPin: handlePin,
+    onCopy: handleCopy,
+    onPaste: handleDoubleClick,
+    onRequestDelete: requestDelete,
+    onOpenDetail: openClipDetailSafe,
+  });
 
   const emptyTitle = search.trim() ? "没有匹配记录" : "暂无剪贴板记录";
   const emptyHint = search.trim()
@@ -1075,6 +912,7 @@ function App() {
               onClick={() => {
                 setTextToolsClip(null);
                 setSettingsInitialTab("general");
+                setSettingsOpenSignal((signal) => signal + 1);
                 setShowSettings(true);
               }}
               title="设置"
@@ -1119,7 +957,11 @@ function App() {
 
       {showSettings ? (
         <Suspense fallback={<div className="detail-empty">加载设置…</div>}>
-          <Settings initialTab={settingsInitialTab} onBack={() => setShowSettings(false)} />
+          <Settings
+            initialTab={settingsInitialTab}
+            openSignal={settingsOpenSignal}
+            onBack={() => setShowSettings(false)}
+          />
         </Suspense>
       ) : (
         <>
@@ -1185,130 +1027,19 @@ function App() {
               </button>
             </div>
 
-            {openPanel === "tags" && (
-              <div className="popover" role="dialog" aria-label="标签筛选">
-                <div className="popover-title">
-                  <span>按标签筛选</span>
-                  {selectedTag && (
-                    <button
-                      className="toolbar-btn"
-                      onClick={() => {
-                        setSelectedTag("");
-                        setOpenPanel(null);
-                      }}
-                    >
-                      清除
-                    </button>
-                  )}
-                </div>
-                {tagsLoading ? (
-                  <div className="empty-hint">加载标签…</div>
-                ) : tagsError ? (
-                  <div className="empty-hint">{tagsError}</div>
-                ) : visibleTags.length === 0 ? (
-                  <div className="empty-hint">还没有标签，详情里可以给记录加标签</div>
-                ) : (
-                  <div className="tag-chips">
-                    <button
-                      className={`tag-chip ${selectedTag === "" ? "active" : ""}`}
-                      onClick={() => {
-                        setSelectedTag("");
-                        setOpenPanel(null);
-                      }}
-                    >
-                      全部标签
-                    </button>
-                    {visibleTags.map((tag) => (
-                      <button
-                        key={tag.name}
-                        className={`tag-chip ${selectedTag === tag.name ? "active" : ""}`}
-                        onClick={() => {
-                          setSelectedTag((current) => (current === tag.name ? "" : tag.name));
-                          setOpenPanel(null);
-                        }}
-                        title={tag.count ? `${tag.name} (${tag.count})` : tag.name}
-                      >
-                        <span>{tag.name}</span>
-                        {tag.count > 0 && <strong>{tag.count}</strong>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {openPanel === "help" && (
-              <div className="popover" role="dialog" aria-label="快捷键">
-                <div className="popover-title">
-                  <span>快捷键</span>
-                  <button className="toolbar-btn" onClick={() => setOpenPanel(null)}>
-                    关闭
-                  </button>
-                </div>
-                <div className="help-grid">
-                  <span>
-                    <kbd>{hotkeyDisplay}</kbd>
-                  </span>
-                  <span>唤起 / 隐藏 ClipBox</span>
-                  <span>
-                    <kbd>↑</kbd>
-                    <kbd>↓</kbd>
-                  </span>
-                  <span>
-                    选择条目，<kbd>Home</kbd> 回到最新
-                  </span>
-                  <span>
-                    <kbd>Enter</kbd>
-                  </span>
-                  <span>复制并粘贴回原窗口</span>
-                  <span>
-                    <kbd>Ctrl</kbd>
-                    <kbd>Enter</kbd>
-                  </span>
-                  <span>只复制</span>
-                  <span>
-                    <kbd>Ctrl</kbd>
-                    <kbd>1</kbd>–<kbd>9</kbd>
-                  </span>
-                  <span>复制第 n 条</span>
-                  <span>
-                    <kbd>Alt</kbd>
-                    <kbd>1</kbd>–<kbd>9</kbd>
-                  </span>
-                  <span>复制并粘贴第 n 条</span>
-                  <span>
-                    <kbd>Space</kbd>
-                  </span>
-                  <span>详情、备注与标签</span>
-                  <span>
-                    <kbd>P</kbd>
-                  </span>
-                  <span>置顶 / 取消置顶</span>
-                  <span>
-                    <kbd>Del</kbd>
-                  </span>
-                  <span>删除（再按一次确认）</span>
-                  <span>
-                    <kbd>Esc</kbd>
-                  </span>
-                  <span>关闭</span>
-                </div>
-              </div>
-            )}
-
-            {openPanel === "more" && (
-              <div className="popover" role="dialog" aria-label="更多操作">
-                <div className="menu-list">
-                  <button
-                    className={`menu-item danger ${clearConfirming ? "confirming" : ""}`}
-                    onClick={handleClear}
-                    disabled={clearing}
-                  >
-                    {clearing ? "清空中…" : clearConfirming ? "再次点击确认清空" : "清空未置顶记录"}
-                  </button>
-                </div>
-              </div>
-            )}
+            <ToolbarPopovers
+              openPanel={openPanel}
+              selectedTag={selectedTag}
+              tagsLoading={tagsLoading}
+              tagsError={tagsError}
+              visibleTags={visibleTags}
+              hotkeyDisplay={hotkeyDisplay}
+              clearConfirming={clearConfirming}
+              clearing={clearing}
+              onSelectTag={setSelectedTag}
+              onClose={() => setOpenPanel(null)}
+              onClear={handleClear}
+            />
           </div>
 
           <div
@@ -1395,105 +1126,28 @@ function App() {
             </button>
           )}
           {ctxMenu && (
-            <div
-              className="ctx-menu"
-              style={{
-                left: Math.min(ctxMenu.x, window.innerWidth - 170),
-                top: Math.max(0, Math.min(ctxMenu.y, window.innerHeight - 260)),
+            <ContextMenu
+              menu={ctxMenu}
+              clips={clips}
+              onClose={() => setCtxMenu(null)}
+              onPasteSearch={handlePasteSearch}
+              onSelectSearch={() => searchRef.current?.select()}
+              onClearSearch={() => {
+                setSearch("");
+                searchRef.current?.focus();
               }}
-              onMouseDown={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.preventDefault()}
-            >
-              {ctxMenu.kind === "search" ? (
-                <>
-                  <button className="ctx-item" onClick={handlePasteSearch}>
-                    粘贴
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      searchRef.current?.select();
-                      setCtxMenu(null);
-                    }}
-                  >
-                    全选
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      setSearch("");
-                      searchRef.current?.focus();
-                      setCtxMenu(null);
-                    }}
-                  >
-                    清空搜索
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      handleCopy(ctxMenu.clipId);
-                      setCtxMenu(null);
-                    }}
-                  >
-                    复制
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      handleDoubleClick(ctxMenu.clipId);
-                      setCtxMenu(null);
-                    }}
-                  >
-                    复制并粘贴
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      handlePin(ctxMenu.clipId);
-                      setCtxMenu(null);
-                    }}
-                  >
-                    置顶 / 取消置顶
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      handleOpenDetail(ctxMenu.clipId).catch(console.error);
-                      setCtxMenu(null);
-                    }}
-                  >
-                    详情
-                  </button>
-                  <button
-                    className="ctx-item"
-                    onClick={() => {
-                      const clip = clips.find((item) => item.id === ctxMenu.clipId);
-                      if (clip) {
-                        closeDetail();
-                        setTextToolsClip(clip);
-                      }
-                      setCtxMenu(null);
-                    }}
-                  >
-                    {clips.find((item) => item.id === ctxMenu.clipId)?.type === "image"
-                      ? "识别文字 / 翻译"
-                      : "翻译文字"}
-                  </button>
-                  <button
-                    className="ctx-item danger"
-                    onClick={() => {
-                      requestDelete(ctxMenu.clipId);
-                      setCtxMenu(null);
-                    }}
-                  >
-                    删除
-                  </button>
-                </>
-              )}
-            </div>
+              onCopy={handleCopy}
+              onCopyAndPaste={handleDoubleClick}
+              onPin={handlePin}
+              onOpenDetail={(id) => {
+                handleOpenDetail(id).catch(console.error);
+              }}
+              onOpenTextTools={(clip) => {
+                closeDetail();
+                setTextToolsClip(clip);
+              }}
+              onDelete={requestDelete}
+            />
           )}
           {detailOpen && (
             <ClipDetailPanel
@@ -1504,7 +1158,7 @@ function App() {
               error={detailError}
               onClose={closeDetail}
               onCopy={handleCopy}
-              onSaveMetadata={handleSaveMetadata}
+              onSaveMetadata={handleSaveMetadataWithRevision}
               onExport={handleExportClip}
               onTextTools={(clip) => {
                 closeDetail();
@@ -1527,6 +1181,7 @@ function App() {
                 onSettings={() => {
                   setTextToolsClip(null);
                   setSettingsInitialTab("textTools");
+                  setSettingsOpenSignal((signal) => signal + 1);
                   setShowSettings(true);
                 }}
               />

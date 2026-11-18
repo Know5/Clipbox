@@ -63,16 +63,21 @@ func (a *App) serveImage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if isPreview {
-			// 1280 pixels is ample for the 400px panel including high-DPI
-			// displays. Original data remains available for copy/export/OCR.
-			preview, previewErr := clipboard.DIBPreview(file, info.Size(), 1280)
-			if previewErr == nil {
-				w.Header().Set("Content-Type", "image/png")
-				if r.Method != http.MethodHead {
+			if r.Method == http.MethodHead {
+				if clipboard.CanPreviewDIB(file, info.Size()) {
+					w.Header().Set("Content-Type", "image/png")
+					return
+				}
+			} else {
+				// 1280 pixels is ample for the 400px panel including high-DPI
+				// displays. Original data remains available for copy/export/OCR.
+				preview, previewErr := clipboard.DIBPreview(file, info.Size(), 1280)
+				if previewErr == nil {
+					w.Header().Set("Content-Type", "image/png")
 					encoder := png.Encoder{CompressionLevel: png.BestSpeed}
 					_ = encoder.Encode(w, preview)
+					return
 				}
-				return
 			}
 			// Keep unusual bitmap formats viewable through the original BMP.
 		}

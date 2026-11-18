@@ -9,9 +9,9 @@ import (
 
 // webviewMemoryArgs are appended to the WebView2 browser command line via the
 // WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable (see main.go).
-// SpareRendererForSitePerProcess avoids a pre-spawned spare renderer process;
-// measured flags for the default set are recorded in PROGRESS.md.
-const webviewMemoryArgs = "--disable-features=SpareRendererForSitePerProcess"
+// SpareRendererForSitePerProcess avoids a pre-spawned spare renderer process,
+// and renderer-process-limit=1 keeps the single compact popup to one renderer.
+const webviewMemoryArgs = "--disable-features=SpareRendererForSitePerProcess --renderer-process-limit=1"
 
 // A job owns the UI and its browser descendants, including processes that
 // outlive the webview host briefly while flushing caches. Application writes

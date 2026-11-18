@@ -111,6 +111,18 @@ export function useSettingsController() {
 
   const saveQueue = useRef<Promise<unknown>>(Promise.resolve());
 
+  const appSettingsRef = useRef(appSettings);
+  appSettingsRef.current = appSettings;
+
+  const commitAppSettings = useCallback(
+    (update: AppSettings | ((prev: AppSettings) => AppSettings)) => {
+      const next = typeof update === "function" ? update(appSettingsRef.current) : update;
+      appSettingsRef.current = next;
+      setAppSettings(next);
+    },
+    [],
+  );
+
   useUIActivity(
     dirtyFields.current.size > 0 ||
       saving ||
@@ -124,7 +136,7 @@ export function useSettingsController() {
   const persistSettings = useCallback(
     (next: AppSettings, prev: AppSettings, onError: (msg: string) => void) => {
       const seq = ++saveSeqRef.current;
-      setAppSettings(next);
+      commitAppSettings(next);
       const patch: Partial<AppSettings> = {};
       for (const key of Object.keys(next) as (keyof AppSettings)[]) {
         if (
@@ -139,16 +151,15 @@ export function useSettingsController() {
       request
         .then((normalized) => {
           if (saveSeqRef.current === seq) {
-            setAppSettings((draft) => {
-              const accepted = { ...draft };
-              for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
-                if (JSON.stringify(draft[key]) === JSON.stringify(next[key])) {
-                  dirtyFields.current.delete(key);
-                  Object.assign(accepted, { [key]: normalized[key] });
-                }
+            const draft = appSettingsRef.current;
+            const accepted = { ...draft };
+            for (const key of Object.keys(patch) as (keyof AppSettings)[]) {
+              if (JSON.stringify(draft[key]) === JSON.stringify(next[key])) {
+                dirtyFields.current.delete(key);
+                Object.assign(accepted, { [key]: normalized[key] });
               }
-              return accepted;
-            });
+            }
+            commitAppSettings(accepted);
           }
         })
         .catch((err) => {
@@ -156,18 +167,18 @@ export function useSettingsController() {
           GetAppSettings()
             .then((saved) => {
               dirtyFields.current.clear();
-              setAppSettings(saved);
+              commitAppSettings(saved);
             })
-            .catch(() => setAppSettings(prev));
+            .catch(() => commitAppSettings(prev));
           onError(errText(err, "保存设置失败"));
         });
     },
-    [],
+    [commitAppSettings],
   );
 
   // 输入框失焦时提交当前编辑（数字/文本类设置的保存入口）。
   const commitEditedSettings = (onError: (msg: string) => void) => {
-    persistSettings(appSettings, appSettings, onError);
+    persistSettings(appSettingsRef.current, appSettingsRef.current, onError);
   };
 
   const blurOnEnter = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -186,25 +197,25 @@ export function useSettingsController() {
 
   useEffect(() => {
     GetAppSettings()
-      .then((settings) => setAppSettings(settings || DEFAULT_SETTINGS))
-      .catch(() => setAppSettings(DEFAULT_SETTINGS));
+      .then((settings) => commitAppSettings(settings || DEFAULT_SETTINGS))
+      .catch(() => commitAppSettings(DEFAULT_SETTINGS));
     GetAppInfo()
       .then((info) => setAppInfo(info || DEFAULT_APP_INFO))
       .catch(() => setAppInfo(DEFAULT_APP_INFO));
     refreshStats();
     refreshLastTargetInfo();
-  }, []);
+  }, [commitAppSettings]);
 
   useEffect(() => {
     const unsubscribe = EventsOn("settings:updated", (settings?: AppSettings) => {
-      setAppSettings((draft) => {
+      commitAppSettings((draft) => {
         const next = { ...(settings || DEFAULT_SETTINGS) };
         for (const key of dirtyFields.current) Object.assign(next, { [key]: draft[key] });
         return next;
       });
     });
     return () => unsubscribe();
-  }, []);
+  }, [commitAppSettings]);
 
   const refreshStats = () => {
     GetStorageStats()
@@ -231,8 +242,8 @@ export function useSettingsController() {
 
   const reloadAppSettings = () => {
     GetAppSettings()
-      .then((settings) => setAppSettings(settings || DEFAULT_SETTINGS))
-      .catch(() => setAppSettings(DEFAULT_SETTINGS));
+      .then((settings) => commitAppSettings(settings || DEFAULT_SETTINGS))
+      .catch(() => commitAppSettings(DEFAULT_SETTINGS));
   };
 
   const handleKeyDown = useCallback(
@@ -347,7 +358,7 @@ export function useSettingsController() {
     setStorageMessage("");
     setAppMessage("");
     const parsed = Number.parseInt(value, 10);
-    setAppSettings((prev) => ({ ...prev, [key]: Number.isFinite(parsed) ? parsed : 0 }));
+    commitAppSettings((prev) => ({ ...prev, [key]: Number.isFinite(parsed) ? parsed : 0 }));
   };
 
   const updateStringSetting = (key: "updateManifestURL" | "autoBackupDir", value: string) => {
@@ -357,7 +368,7 @@ export function useSettingsController() {
     setStorageMessage("");
     setAppMessage("");
     setUpdateResult(null);
-    setAppSettings((prev) => ({ ...prev, [key]: value }));
+    commitAppSettings((prev) => ({ ...prev, [key]: value }));
   };
 
   const updateRuleListSetting = (key: "excludedApps" | "excludedWindowTitles", value: string) => {
@@ -367,7 +378,7 @@ export function useSettingsController() {
     setStorageMessage("");
     setAppMessage("");
     const lines = value === "" ? [] : value.replace(/\r/g, "").split("\n");
-    setAppSettings((prev) => ({ ...prev, [key]: lines }));
+    commitAppSettings((prev) => ({ ...prev, [key]: lines }));
   };
 
   const addLastTargetAppRule = async () => {
@@ -377,12 +388,13 @@ export function useSettingsController() {
       setRulesMessage("没有可加入的上个应用");
       return;
     }
-    const nextRules = appendUniqueRule(appSettings.excludedApps, value);
-    if (nextRules === appSettings.excludedApps) {
+    const current = appSettingsRef.current;
+    const nextRules = appendUniqueRule(current.excludedApps, value);
+    if (nextRules === current.excludedApps) {
       setRulesMessage("该应用已在排除列表中");
       return;
     }
-    persistSettings({ ...appSettings, excludedApps: nextRules }, appSettings, setRulesMessage);
+    persistSettings({ ...current, excludedApps: nextRules }, current, setRulesMessage);
     setRulesMessage("已加入排除应用");
   };
 
@@ -392,16 +404,13 @@ export function useSettingsController() {
       setRulesMessage("没有可加入的窗口标题");
       return;
     }
-    const nextRules = appendUniqueRule(appSettings.excludedWindowTitles, info.title);
-    if (nextRules === appSettings.excludedWindowTitles) {
+    const current = appSettingsRef.current;
+    const nextRules = appendUniqueRule(current.excludedWindowTitles, info.title);
+    if (nextRules === current.excludedWindowTitles) {
       setRulesMessage("该标题已在排除列表中");
       return;
     }
-    persistSettings(
-      { ...appSettings, excludedWindowTitles: nextRules },
-      appSettings,
-      setRulesMessage,
-    );
+    persistSettings({ ...current, excludedWindowTitles: nextRules }, current, setRulesMessage);
     setRulesMessage("已加入排除标题");
   };
 
@@ -498,7 +507,8 @@ export function useSettingsController() {
     try {
       const path = await SelectAutoBackupDir();
       if (path) {
-        persistSettings({ ...appSettings, autoBackupDir: path }, appSettings, setAppMessage);
+        const current = appSettingsRef.current;
+        persistSettings({ ...current, autoBackupDir: path }, current, setAppMessage);
         setAppMessage("已选择自动备份目录");
       }
     } catch (err) {
@@ -512,13 +522,19 @@ export function useSettingsController() {
     setAutoBackupRunning(true);
     setAppMessage("");
     try {
-      const normalized = await PatchAppSettings({
-        autoBackupDir: appSettings.autoBackupDir,
-        autoBackupEnabled: appSettings.autoBackupEnabled,
-        autoBackupIntervalDays: appSettings.autoBackupIntervalDays,
-        autoBackupMaxFiles: appSettings.autoBackupMaxFiles,
-      });
-      setAppSettings(normalized || appSettings);
+      const draft = appSettingsRef.current;
+      const patch = {
+        autoBackupDir: draft.autoBackupDir,
+        autoBackupEnabled: draft.autoBackupEnabled,
+        autoBackupIntervalDays: draft.autoBackupIntervalDays,
+        autoBackupMaxFiles: draft.autoBackupMaxFiles,
+      };
+      const normalized = await PatchAppSettings(patch);
+      dirtyFields.current.delete("autoBackupDir");
+      dirtyFields.current.delete("autoBackupEnabled");
+      dirtyFields.current.delete("autoBackupIntervalDays");
+      dirtyFields.current.delete("autoBackupMaxFiles");
+      commitAppSettings(normalized || appSettingsRef.current);
       const result: BackupStats = await RunAutoBackupNow();
       const skipped = result?.skippedImages ? `，跳过 ${result.skippedImages} 个图片` : "";
       setAppMessage(`已自动备份 ${result?.clips || 0} 条记录：${result?.path || ""}${skipped}`);
@@ -601,7 +617,7 @@ export function useSettingsController() {
     setRepairMessage("");
     try {
       const ok = await RepairStartAtLogin();
-      setAppSettings((prev) => ({ ...prev, startAtLogin: true, startAtLoginBlocked: !ok }));
+      commitAppSettings((prev) => ({ ...prev, startAtLogin: true, startAtLoginBlocked: !ok }));
       setRepairMessage(ok ? "已启用" : "仍被 Windows 阻止，请在任务管理器 → 启动 里启用");
     } catch (e) {
       setRepairMessage(errText(e, "启用失败"));

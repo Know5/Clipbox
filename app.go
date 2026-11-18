@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -10,6 +13,7 @@ import (
 
 	"clipbox/internal/clipboard"
 	"clipbox/internal/hotkey"
+	"clipbox/internal/ocr"
 	"clipbox/internal/storage"
 	"clipbox/internal/tray"
 	"clipbox/internal/windowutil"
@@ -36,6 +40,7 @@ type App struct {
 	mu                sync.Mutex
 	clipboardActionMu sync.Mutex
 	historyMu         sync.Mutex
+	backupMu          sync.Mutex
 	historyChanged    func(ClipHistoryChange)
 	settingsMu        sync.Mutex
 	settingsWriteMu   sync.Mutex
@@ -43,6 +48,9 @@ type App struct {
 	settingsCache     *AppSettings // 内存缓存：避免每次剪贴板事件/托盘刷新都跑 16 条 SQL
 	textToolsMu       sync.Mutex
 	textTasks         map[string]context.CancelFunc
+	ocrLangMu         sync.Mutex
+	ocrLangs          []ocr.Language
+	ocrLangsReady     bool
 	foregroundInfo    func() windowutil.ForegroundInfo
 	windowInfo        func(hwnd uintptr) windowutil.ForegroundInfo
 	stopCh            chan struct{} // closed on shutdown to stop background loops (auto-backup ticker)
@@ -83,12 +91,33 @@ func (a *App) startup(ctx context.Context) {
 			a.store.DiscardEntryFiles(entry)
 			return
 		}
-		entry = prepared
+		rawImage := prepared.RawImage
+		prepared.RawImage = nil
+		if prepared.Type == "image" && len(rawImage) > 0 {
+			sum := sha256.Sum256(rawImage)
+			hash := hex.EncodeToString(sum[:])
+			prepared.ContentHash = hash
+			if exists, err := a.store.HasReadableImageHash(hash); err == nil && exists {
+				if _, err := a.persistCapturedClip(prepared); err == nil {
+					return
+				} else if !errors.Is(err, storage.ErrMissingImagePayload) {
+					a.logErrorf("failed to save/update clip type=%s previewLen=%d: %v", prepared.Type, len([]rune(prepared.Preview)), err)
+					return
+				}
+			}
+			stored, reason := clipboard.StoreImageSnapshot(rawImage)
+			if stored == nil {
+				if reason != "" {
+					a.logErrorf("failed to store clipboard image: %s", string(reason))
+				}
+				return
+			}
+			prepared.Content = stored.Content
+			prepared.Thumbnail = stored.Thumbnail
+		}
 
-		_, err := a.persistCapturedClip(entry)
-		if err != nil {
-
-			a.logErrorf("failed to save/update clip type=%s previewLen=%d: %v", entry.Type, len([]rune(entry.Preview)), err)
+		if _, err := a.persistCapturedClip(prepared); err != nil {
+			a.logErrorf("failed to save/update clip type=%s previewLen=%d: %v", prepared.Type, len([]rune(prepared.Preview)), err)
 			return
 		}
 	})
@@ -248,25 +277,7 @@ func (a *App) shutdown(ctx context.Context) {
 }
 
 func (a *App) toggleWindow() {
-	a.mu.Lock()
-	if time.Since(a.lastToggle) < 400*time.Millisecond {
-		a.mu.Unlock()
-		return
-	}
-	a.lastToggle = time.Now()
-	visible := a.windowVisible
-	a.mu.Unlock()
-
-	if visible {
-		a.hideWindow()
-		return
-	}
-
-	a.showWindow()
-}
-
-func (a *App) showWindow() {
-	a.showWindowInternal(true)
+	a.toggleWindowMode(true)
 }
 
 func (a *App) showWindowFromTray() {
@@ -285,7 +296,11 @@ func (a *App) showWindowInternal(captureTarget bool) {
 		}
 		a.windowVisible = true
 		a.mu.Unlock()
-		a.resident.show(false)
+		if !a.resident.show(false) {
+			a.mu.Lock()
+			a.windowVisible = false
+			a.mu.Unlock()
+		}
 		a.updateTrayState()
 		return
 	}
@@ -322,22 +337,6 @@ func (a *App) showWindowInternal(captureTarget bool) {
 	a.updateTrayState()
 }
 
-func (a *App) showFromSecondInstance() {
-	if a.ctx == nil {
-		return
-	}
-	a.mu.Lock()
-	a.windowVisible = true
-	a.mu.Unlock()
-
-	runtime.WindowShow(a.ctx)
-	runtime.WindowUnminimise(a.ctx)
-	runtime.WindowSetAlwaysOnTop(a.ctx, true)
-	a.emit("window:shown")
-	a.emit("clips:changed")
-	a.updateTrayState()
-}
-
 func (a *App) hideWindow() {
 	if a.resident != nil {
 		a.mu.Lock()
@@ -360,14 +359,24 @@ func (a *App) hideWindow() {
 }
 
 func (a *App) toggleWindowFromTray() {
+	a.toggleWindowMode(false)
+}
+
+func (a *App) toggleWindowMode(captureTarget bool) {
 	a.mu.Lock()
+	if time.Since(a.lastToggle) < 400*time.Millisecond {
+		a.mu.Unlock()
+		return
+	}
+	a.lastToggle = time.Now()
 	visible := a.windowVisible
 	a.mu.Unlock()
+
 	if visible {
 		a.hideWindow()
 		return
 	}
-	a.showWindowFromTray()
+	a.showWindowInternal(captureTarget)
 }
 
 func (a *App) startTray() {
@@ -408,7 +417,11 @@ func (a *App) openSettingsFromTray() {
 		a.mu.Lock()
 		a.windowVisible = true
 		a.mu.Unlock()
-		a.resident.show(true)
+		if !a.resident.show(true) {
+			a.mu.Lock()
+			a.windowVisible = false
+			a.mu.Unlock()
+		}
 		a.updateTrayState()
 		return
 	}

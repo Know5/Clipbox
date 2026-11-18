@@ -29,6 +29,8 @@ type UIBridge struct {
 
 func newUIBridge() (*UIBridge, error) {
 	client := &ipcClient{path: os.Getenv("CLIPBOX_UI_PIPE"), token: os.Getenv("CLIPBOX_UI_TOKEN")}
+	// Keep WebView2 browser/renderer descendants from inheriting the IPC secret.
+	_ = os.Unsetenv("CLIPBOX_UI_TOKEN")
 	if client.path == "" || client.token == "" {
 		return nil, fmt.Errorf("请从 ClipBox 主程序打开界面")
 	}
@@ -183,7 +185,9 @@ func (b *UIBridge) beforeClose(context.Context) bool {
 	if b.quitting.Load() {
 		return false
 	}
-	b.HideWindow()
+	// Avoid synchronously waiting for resident.hide() -> ui:hide -> WindowHide
+	// on the window thread that is currently inside OnBeforeClose.
+	go b.HideWindow()
 	return true
 }
 

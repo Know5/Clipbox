@@ -117,6 +117,27 @@ func TestImagePreviewIsBoundedAndOriginalUnchanged(t *testing.T) {
 	}
 }
 
+func TestImagePreviewHeadSkipsBody(t *testing.T) {
+	app := newTestAppWithStore(t)
+	path := filepath.Join(app.dataDir, "head.dib")
+	if err := os.WriteFile(path, sizedDib(16, 16), 0600); err != nil {
+		t.Fatal(err)
+	}
+	id, err := app.store.SaveOrUpdate(clipboard.ClipEntry{Type: "image", Content: path, Preview: "head", Timestamp: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, err := app.GetImageURL(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	app.serveImage(w, httptest.NewRequest(http.MethodHead, url, nil))
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/png" || w.Body.Len() != 0 {
+		t.Fatalf("HEAD %s = status=%d ct=%q len=%d", url, w.Code, w.Header().Get("Content-Type"), w.Body.Len())
+	}
+}
+
 func BenchmarkImageDelivery(b *testing.B) {
 	dataDir := b.TempDir()
 	store, err := storage.NewStore(dataDir)

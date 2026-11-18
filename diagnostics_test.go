@@ -71,3 +71,32 @@ func TestTailFileReturnsLastBytes(t *testing.T) {
 		t.Fatalf("tailFile() = %q, want 6789", string(data))
 	}
 }
+
+func TestRotateLogIfOversized(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "clipbox.log")
+	backupPath := logPath + ".1"
+
+	first := []byte(string(make([]byte, 80)))
+	if err := os.WriteFile(logPath, first, 0644); err != nil {
+		t.Fatalf("WriteFile first log: %v", err)
+	}
+	rotateLogIfOversized(logPath, 64)
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("expected active log to be rotated away, stat err = %v", err)
+	}
+	gotBackup, err := os.ReadFile(backupPath)
+	if err != nil || len(gotBackup) != len(first) {
+		t.Fatalf("rotated backup size=%d err=%v, want %d", len(gotBackup), err, len(first))
+	}
+
+	second := []byte("second-oversized-log-payload-exceeding-sixty-four-bytes-threshold-limit")
+	if err := os.WriteFile(logPath, second, 0644); err != nil {
+		t.Fatalf("WriteFile second log: %v", err)
+	}
+	rotateLogIfOversized(logPath, 64)
+	gotBackup, err = os.ReadFile(backupPath)
+	if err != nil || string(gotBackup) != string(second) {
+		t.Fatalf("rotated backup = %q err=%v, want %q", string(gotBackup), err, string(second))
+	}
+}

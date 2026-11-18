@@ -16,7 +16,10 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const maxDiagnosticLogBytes = 2 * 1024 * 1024
+const (
+	maxDiagnosticLogBytes = 2 * 1024 * 1024
+	maxLogFileBytes       = 5 * 1024 * 1024
+)
 
 type DiagnosticStats struct {
 	Path      string `json:"path"`
@@ -73,6 +76,7 @@ func (a *App) appendLog(level, format string, args ...interface{}) {
 	if err := os.MkdirAll(filepath.Dir(a.logPath), 0755); err != nil {
 		return
 	}
+	rotateLogIfOversized(a.logPath, maxLogFileBytes)
 	file, err := os.OpenFile(a.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
 		return
@@ -81,6 +85,19 @@ func (a *App) appendLog(level, format string, args ...interface{}) {
 
 	message := fmt.Sprintf(format, args...)
 	_, _ = fmt.Fprintf(file, "%s [%s] %s\n", time.Now().UTC().Format(time.RFC3339), level, message)
+}
+
+func rotateLogIfOversized(logPath string, maxBytes int64) {
+	if maxBytes <= 0 {
+		return
+	}
+	info, err := os.Stat(logPath)
+	if err != nil || info.Size() < maxBytes {
+		return
+	}
+	backupPath := logPath + ".1"
+	_ = os.Remove(backupPath)
+	_ = os.Rename(logPath, backupPath)
 }
 
 func (a *App) ExportDiagnostics() (DiagnosticStats, error) {

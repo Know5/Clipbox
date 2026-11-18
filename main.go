@@ -22,12 +22,7 @@ var assets embed.FS
 
 func main() {
 	debug.SetMemoryLimit(50 * 1024 * 1024)
-	// WebView2 reads WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS when the environment
-	// is created; the UI process inherits it from this process. Keep an
-	// existing value intact so a user can override or extend it.
-	if os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") == "" {
-		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webviewMemoryArgs)
-	}
+	ensureWebViewMemoryArgs()
 	if bindingBuild() {
 		_ = runUI(&UIBridge{local: NewApp("", true)})
 		return
@@ -70,7 +65,6 @@ func main() {
 }
 
 func runUI(bridge *UIBridge) error {
-	os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--renderer-process-limit=1")
 	startHidden := true
 	if bridge.direct != nil {
 		startHidden = bridge.local.startHidden
@@ -112,6 +106,14 @@ func runUI(bridge *UIBridge) error {
 
 }
 
+// ensureWebViewMemoryArgs sets default WebView2 browser flags only when the
+// caller has not already supplied WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS, so a
+// user or test can override or extend them without runUI clobbering them.
+func ensureWebViewMemoryArgs() {
+	if os.Getenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS") == "" {
+		os.Setenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", webviewMemoryArgs)
+	}
+}
 func hasArg(name string) bool {
 	for _, arg := range os.Args[1:] {
 		if arg == name {

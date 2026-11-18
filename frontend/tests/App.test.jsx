@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   paste: vi.fn(),
   togglePin: vi.fn(),
   deleteClip: vi.fn(),
+  getViewState: vi.fn(),
 }));
 
 vi.mock("../src/api", async () => ({
@@ -30,7 +31,7 @@ vi.mock("../src/api", async () => ({
   GetHotkeySettings: vi.fn(async () => ({ display: "Ctrl + Alt + V" })),
   GetWindowPinned: vi.fn(async () => false),
   FrontendReady: vi.fn(async () => {}),
-  GetViewState: vi.fn(async () => ""),
+  GetViewState: mocks.getViewState,
   SaveViewState: vi.fn(async () => {}),
   SetUIActivity: vi.fn(async () => {}),
   GetClipImageMeta: vi.fn(async () => []),
@@ -88,6 +89,7 @@ beforeEach(() => {
   backendItems = [];
   backendTotal = 0;
   mocks.handlers.clear();
+  mocks.getViewState.mockReset().mockResolvedValue("");
   mocks.getPage.mockReset().mockImplementation(page);
   mocks.getTags.mockReset().mockResolvedValue([]);
   mocks.getDetails
@@ -434,5 +436,40 @@ describe("live history list", () => {
     expect(screen.getAllByRole("option")).toHaveLength(50);
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(100));
+  });
+
+  it("loads saved view state in a single request on startup", async () => {
+    backendItems = [clip(1, { content: "row-1", preview: "row-1", tags: "Work" })];
+    backendTotal = 1;
+    mocks.getViewState.mockResolvedValueOnce(
+      JSON.stringify({ search: "row", filter: "text", tag: "Work" }),
+    );
+    mocks.getPage.mockImplementationOnce((_query, type, tag, limit, offset) =>
+      page(type, tag, limit, offset),
+    );
+    render(<App />);
+    const option = await screen.findByRole("option");
+    expect(option.textContent).toContain("row-1");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(mocks.getPage).toHaveBeenCalledTimes(1);
+    expect(mocks.getPage).toHaveBeenCalledWith("row", "text", "Work", 50, 0);
+  });
+
+  it("scrolls selected row into view only for keyboard navigation, not mouse hover", async () => {
+    backendItems = [clip(2), clip(1)];
+    backendTotal = 2;
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    scrollIntoView.mockClear();
+    try {
+      render(<App />);
+      const row1 = (await screen.findByText("row-1")).closest('[role="option"]');
+      fireEvent.mouseOver(row1);
+      await waitFor(() => expect(row1.getAttribute("aria-selected")).toBe("true"));
+      expect(scrollIntoView).not.toHaveBeenCalled();
+      fireEvent.keyDown(window, { key: "ArrowUp" });
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    } finally {
+      scrollIntoView.mockRestore();
+    }
   });
 });

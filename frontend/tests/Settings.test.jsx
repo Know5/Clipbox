@@ -66,4 +66,12 @@ describe("settings drafts", () => {
     await act(async () => resolve({ ...stored, minTextLength: 2 }));
     expect(input.value).toBe("3");
   });
+  it("resets active tab when openSignal increments even with unchanged initialTab", async () => {
+    const { rerender } = render(<Settings onBack={() => {}} initialTab="general" openSignal={1} />);
+    await waitFor(() => expect(api.get).toHaveBeenCalled());
+    fireEvent.click(screen.getByRole("tab", { name: "隐私" }));
+    expect(screen.getByRole("tab", { name: "隐私" }).getAttribute("aria-selected")).toBe("true");
+    rerender(<Settings onBack={() => {}} initialTab="general" openSignal={2} />);
+    expect(screen.getByRole("tab", { name: "常规" }).getAttribute("aria-selected")).toBe("true");
+  });
 });

@@ -100,6 +100,8 @@ func (a *App) autoBackupDue(settings AppSettings, now time.Time) bool {
 }
 
 func (a *App) runAutoBackup(settings AppSettings, now time.Time) (storage.BackupStats, error) {
+	a.backupMu.Lock()
+	defer a.backupMu.Unlock()
 	if a.store == nil {
 		return storage.BackupStats{}, fmt.Errorf("app is not ready")
 	}
